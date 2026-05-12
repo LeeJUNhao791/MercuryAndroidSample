@@ -13,6 +13,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.ffalcon.mercury.android.sdk.core.make3DEffectForSide
 import com.ffalcon.mercury.android.sdk.demo.databinding.LayoutDemoHomeBinding
 import com.ffalcon.mercury.android.sdk.demo.ui.activity.api.APIHomeActivity
+import com.ffalcon.mercury.android.sdk.demo.ui.activity.audio.AudioRecordPlayActivity
 import com.ffalcon.mercury.android.sdk.demo.ui.activity.camera.CameraHomeActivity
 import com.ffalcon.mercury.android.sdk.demo.ui.activity.fusion.FusionVisionHomeActivity
 import com.ffalcon.mercury.android.sdk.demo.ui.activity.player.VideoPlayActivity
@@ -102,6 +103,11 @@ class DemoHomeActivity : BaseMirrorActivity<LayoutDemoHomeBinding>() {
             // 2. 语音识别
             addVisibleFocusTarget(btnSpeaker) {
                 startActivity(Intent(this@DemoHomeActivity, VoiceRecognitionActivity::class.java))
+            }
+
+            // 3. 录音与播放
+            addVisibleFocusTarget(btnAudioRecord) {
+                startActivity(Intent(this@DemoHomeActivity, AudioRecordPlayActivity::class.java))
             }
 
             addVisibleFocusTarget(btnFusionVision) {

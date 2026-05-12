@@ -93,4 +93,13 @@
         android:text="@string/speaker"
         android:textAllCaps="false" />
 
+    <!-- 录音功能入口（可见） -->
+    <Button
+        android:id="@+id/btnAudioRecord"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_margin="5dp"
+        android:text="@string/audio_record"
+        android:textAllCaps="false" />
+
 </LinearLayout>

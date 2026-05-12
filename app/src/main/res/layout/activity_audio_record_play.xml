@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    录音与播放界面布局文件
+
+    用于演示 RayNeo AR 眼镜的录音与回放功能：
+    - 状态显示区域：显示当前状态（就绪、录音中、录音完成、播放中）
+    - 录音按钮：开始/停止录音
+    - 播放按钮：播放录制的音频（仅在有录音时可用）
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/black"
+    android:orientation="vertical">
+
+    <!-- 状态显示文本 -->
+    <TextView
+        android:id="@+id/tv_status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="32dp"
+        android:gravity="center"
+        android:text="@string/audio_record_ready"
+        android:textColor="@color/white"
+        android:textSize="24sp"
+        android:textStyle="bold" />
+
+    <!-- 录音状态指示 -->
+    <TextView
+        android:id="@+id/tv_record_time"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:gravity="center"
+        android:textColor="@color/color_rayneo_theme_0"
+        android:textSize="18sp" />
+
+    <!-- 按钮容器 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:gravity="center"
+        android:orientation="vertical">
+
+        <!-- 录音按钮 -->
+        <Button
+            android:id="@+id/btn_record"
+            android:layout_width="300dp"
+            android:layout_height="wrap_content"
+            android:layout_margin="16dp"
+            android:text="@string/start_record"
+            android:textAllCaps="false"
+            android:textSize="20sp" />
+
+        <!-- 播放按钮 -->
+        <Button
+            android:id="@+id/btn_play"
+            android:layout_width="300dp"
+            android:layout_height="wrap_content"
+            android:layout_margin="16dp"
+            android:enabled="false"
+            android:text="@string/start_play"
+            android:textAllCaps="false"
+            android:textSize="20sp" />
+
+    </LinearLayout>
+
+</LinearLayout>

@@ -5,4 +5,15 @@
     <string name="stop">Stop</string>
     <string name="speaker">语音识别</string>
     <string name="scanner">扫码</string>
+    <string name="audio_record_ready">就绪，请点击录音按钮</string>
+    <string name="start_record">开始录音</string>
+    <string name="stop_record">停止录音</string>
+    <string name="start_play">播放录音</string>
+    <string name="stop_play">停止播放</string>
+    <string name="audio_recording">正在录音中...</string>
+    <string name="audio_recorded">录音完成</string>
+    <string name="audio_record_failed">录音失败</string>
+    <string name="audio_playing">正在播放...</string>
+    <string name="audio_play_finished">播放完毕</string>
+    <string name="audio_record">录音</string>
 </resources>
