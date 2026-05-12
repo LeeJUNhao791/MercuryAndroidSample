@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">MercuryAndroidSDK</string>
+    <string name="hint">Click the Start button to play speech-to-text with Next-gen Kaldi.</string>
+    <string name="start">Start</string>
+    <string name="stop">Stop</string>
+    <string name="speaker">语音识别</string>
+    <string name="scanner">扫码</string>
+</resources>

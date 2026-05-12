@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    二维码扫描界面布局文件
+    
+    用于展示二维码/条码扫描功能的主界面，包括：
+    - 相机预览区域：显示摄像头实时画面
+    - 扫码框：引导用户将二维码对准扫描区域
+    - 扫码结果展示：显示识别出的内容
+    - 返回按钮：退出扫描界面
+    - 扫码提示：指导用户如何操作
+-->
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000">
+
+    <!-- 相机预览视图，显示摄像头实时画面 -->
+    <androidx.camera.view.PreviewView
+        android:id="@+id/previewView"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <!-- 扫码框视图，引导用户将二维码对准扫描区域 -->
+    <com.king.view.viewfinderview.ViewfinderView
+        android:id="@+id/viewfinderView"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:vvViewfinderStyle="popular"
+        app:vvLaserStyle="image"
+        app:vvLaserDrawableRatio="0.8"
+        app:vvLaserDrawable="@drawable/ic_laser_line" />
+
+    <!-- 扫码结果显示文本，识别成功后显示二维码内容 -->
+    <TextView
+        android:id="@+id/tvResult"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="120dp"
+        android:background="#B3000000"
+        android:padding="20dp"
+        android:textColor="#FFFFFF"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:visibility="gone"
+        android:gravity="center"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent" />
+
+    <!-- 返回按钮，点击退出扫描界面 -->
+    <Button
+        android:id="@+id/btnBack"
+        android:layout_width="120dp"
+        android:layout_height="60dp"
+        android:layout_margin="20dp"
+        android:background="@color/black"
+        android:text="返回"
+        android:textColor="#FFFFFF"
+        android:textSize="16sp"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <!-- 扫码提示文本，指导用户如何操作 -->
+    <TextView
+        android:id="@+id/tvHint"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="40dp"
+        android:background="#80000000"
+        android:padding="12dp"
+        android:text="将条码放入框内，即可自动扫描"
+        android:textColor="#FFFFFF"
+        android:textSize="14sp"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+</androidx.constraintlayout.widget.ConstraintLayout>

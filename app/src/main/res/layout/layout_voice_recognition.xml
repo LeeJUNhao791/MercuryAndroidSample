@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    语音识别界面布局文件
+    
+    用于展示语音识别功能的主界面，包括：
+    - 状态显示区域：显示当前录音状态
+    - 识别结果展示区：滚动显示识别出的文本内容
+    - 控制按钮：开始/停止录音
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/black"
+    android:orientation="vertical">
+
+    <!-- 状态显示文本，显示当前录音状态（如“正在录音”、“识别中”等） -->
+    <TextView
+        android:id="@+id/tv_status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_margin="16dp"
+        android:gravity="center"
+        android:text="@string/speaker"
+        android:textColor="@color/white"
+        android:textSize="24sp"
+        android:textStyle="bold" />
+
+    <!-- 滚动视图容器，用于显示长篇识别结果 -->
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true">
+
+        <!-- 识别结果展示文本，支持垂直滚动 -->
+        <TextView
+            android:id="@+id/tv_recognition_result"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:padding="16dp"
+            android:textColor="@color/white"
+            android:textSize="18sp"
+            android:scrollbars="vertical"
+            android:lineSpacingExtra="8dp" />
+    </ScrollView>
+
+    <!-- 录音控制按钮，点击开始/停止录音 -->
+    <Button
+        android:id="@+id/btn_record"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_margin="16dp"
+        android:text="@string/start"
+        android:textSize="18sp" />
+
+</LinearLayout>

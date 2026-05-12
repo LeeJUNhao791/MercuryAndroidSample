@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Demo 主页布局文件
+    
+    用于 MercuryAndroidSDK 示例应用的主界面，展示所有功能模块的入口按钮。
+    当前只显示两个可用功能：二维码扫描和语音识别。
+    其他功能按钮已隐藏（visibility="gone"），可根据需要启用。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/black"
+    android:orientation="vertical"
+    tools:ignore="HardcodedText">
+
+    <!-- 融合视觉功能入口（当前隐藏） -->
+    <Button
+        android:id="@+id/btn_fusion_vision"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_margin="5dp"
+        android:text="Fusion Vision"
+        android:visibility="gone"
+        android:textAllCaps="false" />
+
+    <!-- RecyclerView 焦点管理演示入口（当前隐藏） -->
+    <Button
+        android:id="@+id/btn_recycle_view"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_margin="5dp"
+        android:text="View Focusable"
+        android:visibility="gone"
+        android:textAllCaps="false" />
+
+    <!-- API 功能演示入口（当前隐藏），包括 GPS、BLE、IMU 传感器等 -->
+    <Button
+        android:id="@+id/btn_api"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_margin="5dp"
+        android:text="API"
+        android:visibility="gone"
+        android:textAllCaps="false" />
+
+    <!-- 相机功能演示入口（当前隐藏），展示 Camera2 API 使用 -->
+    <Button
+        android:id="@+id/btn_camera"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_margin="5dp"
+        android:text="Camera"
+        android:visibility="gone"
+        android:textAllCaps="false" />
+
+    <!-- Temple 触摸板事件演示入口（当前隐藏） -->
+    <Button
+        android:id="@+id/btn_event"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_margin="5dp"
+        android:text="TP Event"
+        android:visibility="gone"
+        android:textAllCaps="false" />
+
+
+    <!-- 视频播放功能演示入口（当前隐藏），展示 SurfaceView 使用 -->
+    <Button
+        android:id="@+id/btn_player"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_margin="5dp"
+        android:text="SurfaceView"
+        android:visibility="gone"
+        android:textAllCaps="false" />
+
+    <!-- 二维码扫描功能入口（可见） -->
+    <Button
+        android:id="@+id/btnQrcodeScan"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_margin="5dp"
+        android:text="@string/scanner"
+        android:textAllCaps="false" />
+
+    <!-- 语音识别功能入口（可见） -->
+    <Button
+        android:id="@+id/btnSpeaker"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_margin="5dp"
+        android:text="@string/speaker"
+        android:textAllCaps="false" />
+
+</LinearLayout>

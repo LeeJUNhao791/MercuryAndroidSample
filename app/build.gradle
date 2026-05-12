@@ -1,0 +1,67 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+android {
+    namespace 'com.ffalcon.mercury.android.sdk.demo'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.ffalcon.mercury.android.sdk"
+        minSdk 29
+        targetSdk 31
+        versionCode 1
+        versionName "1.0.1"
+
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+    
+    buildTypes {
+
+        debug {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+    kotlinOptions {
+        jvmTarget = '1.8'
+    }
+
+    buildFeatures {
+        viewBinding = true
+    }
+}
+
+dependencies {
+    implementation(fileTree("libs"))
+    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.5.1'
+    implementation 'androidx.fragment:fragment-ktx:1.5.3'
+    implementation 'androidx.core:core-ktx:1.7.0'
+    implementation 'androidx.appcompat:appcompat:1.3.0'
+    implementation 'com.google.android.material:material:1.8.0'
+    implementation 'com.tencent.tav:libpag:4.3.62'
+
+    implementation 'com.google.mlkit:barcode-scanning:17.3.0'
+    implementation 'com.google.mlkit:vision-common:17.3.0'
+    implementation 'com.google.mlkit:vision-interfaces:16.3.0'
+    implementation 'com.github.jenly1314:camera-scan:1.4.1'
+    implementation 'com.github.jenly1314:viewfinderview:1.4.0'
+
+    // 本地单元测试依赖（运行在 JVM 上）
+    testImplementation 'junit:junit:4.13.2'
+
+    // Android 仪器化测试依赖（运行在设备或模拟器上）
+    androidTestImplementation 'androidx.test.ext:junit:1.1.5'
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
+}
