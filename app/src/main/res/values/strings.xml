@@ -16,4 +16,5 @@
     <string name="audio_playing">正在播放...</string>
     <string name="audio_play_finished">播放完毕</string>
     <string name="audio_record">录音</string>
+    <string name="wenet_loading">加载中...</string>
 </resources>

@@ -1,0 +1,327 @@
+# Android State Management & Coroutines Rules
+
+## 概述
+本规则约束 ViewModel、协程、状态管理的 Kotlin 编码规范。适用于所有 ViewModel 和协程相关代码。
+
+---
+
+## 1. StateFlow 规范
+
+### 强制要求
+- ViewModel **只暴露** `StateFlow<UiState>` 或 `Flow<UiState>`，**禁止暴露** `MutableStateFlow`
+- UiState 必须是 **不可变 data class 或 sealed interface**
+- 用 ` MutableStateFlow.copy()` 或 `.update {}` 更新状态，**禁止直接修改属性**
+
+### 正确写法
+```kotlin
+// ✅ ViewModel
+@HiltViewModel
+class ChatViewModel @Inject constructor(
+    private val loadMessagesUseCase: LoadMessagesUseCase
+) : ViewModel() {
+
+    private val _uiState = MutableStateFlow(ChatUiState())
+    val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
+
+    fun loadMessages() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true) }
+            // ...
+        }
+    }
+}
+
+// ✅ UiState
+data class ChatUiState(
+    val messages: List<Message> = emptyList(),
+    val isLoading: Boolean = false,
+    val error: ChatError? = null
+)
+
+// ✅ sealed interface 替代 data class
+sealed interface ChatUiState {
+    data object Loading : ChatUiState
+    data class Content(val messages: List<Message>) : ChatUiState
+    data class Error(val error: ChatError) : ChatUiState
+}
+```
+
+### 禁止写法
+```kotlin
+// ❌ 禁止暴露 MutableStateFlow
+val uiState = MutableStateFlow(ChatUiState())
+
+// ❌ 禁止直接修改状态属性
+_uiState.isLoading = true
+_uiState.messages.add(msg)
+
+// ❌ 禁止用 var 声明 State
+private var _uiState = MutableStateFlow(ChatUiState()) // 用 val + update
+```
+
+---
+
+## 2. 协程规范
+
+### 强制要求
+- **禁止使用** `GlobalScope`，必须使用 `viewModelScope` 或注入的 `CoroutineDispatcher`
+- **禁止硬编码** `Dispatchers.IO`，使用注入的 `IODispatcher`
+- **禁止在 Composable 内直接调用** suspend 函数，必须用 `LaunchedEffect` 或 `rememberCoroutineScope`
+- ViewModel 中业务逻辑统一走 `UseCase`，不直接调用 Repository
+
+### 正确写法
+```kotlin
+// ✅ 使用注入的 Dispatcher
+@Singleton
+class MessageRepository @Inject constructor(
+    @IODispatcher private val ioDispatcher: CoroutineDispatcher,
+    private val api: MessageApi,
+    private val db: MessageDao
+) {
+    suspend fun fetchMessages(): Result<List<Message>> =
+        withContext(ioDispatcher) { /* ... */ }
+}
+
+// ✅ Composable 中正确使用协程
+@Composable
+fun ChatScreen(vm: ChatViewModel = hiltViewModel()) {
+    val uiState by vm.uiState.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    // 正确：LaunchedEffect 捕获 key
+    LaunchedEffect(vm.uiState.value.error) {
+        vm.uiState.value.error?.let {
+            snackbarHostState.showSnackbar(it.message)
+        }
+    }
+}
+```
+
+### 禁止写法
+```kotlin
+// ❌ GlobalScope
+GlobalScope.launch { /* ... */ }
+
+// ❌ 硬编码 Dispatcher
+withContext(Dispatchers.IO) { /* ... */ }
+
+// ❌ Composable 中直接调 suspend
+@Composable
+fun Bad() {
+    val data = viewModel.loadData() // ❌ 不能直接调用 suspend
+}
+
+// ❌ ViewModel 直接调 Repository
+class BadViewModel : ViewModel() {
+    fun load() {
+        viewModelScope.launch {
+            repository.getData() // ❌ 应该走 UseCase
+        }
+    }
+}
+```
+
+---
+
+## 3. 错误处理规范
+
+### 强制要求
+- 使用 `sealed interface` / `sealed class` 定义错误类型，**禁止裸 `try-catch`**
+- Repository 方法返回 `Result<T>` 或 `Flow<Result<T>>`，不允许抛出异常
+- 每个功能模块定义自己的 Error sealed class，不要共用全局 Exception
+
+### 正确写法
+```kotlin
+// ✅ 统一错误类型
+sealed interface ChatError {
+    data class Network(val cause: Throwable) : ChatError
+    data object Timeout : ChatError
+    data class Server(val code: Int) : ChatError
+}
+
+// ✅ Repository 返回 Result
+class ChatRepository @Inject constructor(
+    private val api: ChatApi
+) {
+    suspend fun getMessages(): Result<List<Message>> = runCatching {
+        api.getMessages()
+    }.mapError { it as? ChatError ?: ChatError.Network(it) }
+}
+
+// ✅ ViewModel 中使用
+fun loadMessages() {
+    viewModelScope.launch {
+        loadMessagesUseCase()
+            .onSuccess { msgs -> _uiState.update { it.copy(messages = msgs) } }
+            .onFailure { err -> _uiState.update { it.copy(error = err as? ChatError) } }
+    }
+}
+```
+
+### 禁止写法
+```kotlin
+// ❌ 裸 try-catch
+try {
+    val data = api.getData()
+} catch (e: Exception) {
+    // ...
+}
+
+// ❌ 返回可空类型代替 Result
+suspend fun getMessages(): List<Message>? // ❌ 用 Result
+
+// ❌ 捕获通用 Exception
+catch (e: Exception) { /* 不知道什么错误 */ }
+```
+
+---
+
+## 4. 并发安全规范
+
+### 强制要求
+- 多个协程同时修改共享状态时，使用 `StateFlow.update {}` 或 `Mutex` 保证原子性
+- **禁止**用 `mutableListOf` / `mutableMapOf` 在协程间共享可变集合
+- ViewModel 启动多个并发任务时，使用 `async` + `awaitAll` 或 `combine` 合并结果
+
+### 正确写法
+```kotlin
+// ✅ StateFlow.update 保证原子性
+private val _orders = MutableStateFlow<List<Order>>(emptyList())
+val orders: StateFlow<List<Order>> = _orders.asStateFlow()
+
+fun loadOrders() {
+    viewModelScope.launch {
+        val remote = repo.fetchOrders()
+        _orders.update { current -> current + remote } // 原子操作
+    }
+}
+
+// ✅ 并发任务用 awaitAll
+fun loadDashboard() {
+    viewModelScope.launch {
+        _uiState.update { it.copy(isLoading = true) }
+        try {
+            val (user, stats) = awaitAll(
+                async { userRepo.getUser() },
+                async { statsRepo.getStats() }
+            )
+            _uiState.update { it.copy(user = user, stats = stats) }
+        } catch (e: Throwable) {
+            _uiState.update { it.copy(error = e as? AppError) }
+        }
+    }
+}
+```
+
+### 禁止写法
+```kotlin
+// ❌ 协程间共享可变集合
+class BadViewModel : ViewModel() {
+    private val pendingOrders = mutableListOf<Order>() // ❌
+
+    fun loadOrders() {
+        viewModelScope.launch {
+            val remote = repo.fetchOrders()
+            pendingOrders.addAll(remote) // ❌ 并发时 ConcurrentModification
+        }
+    }
+}
+```
+
+---
+
+## 5. 空安全规范
+
+### 强制要求
+- **禁止使用** `!!` 操作符（测试代码除外）
+- Android Framework API（`getSystemService`、`findViewById`、`getParcelableExtra`）返回值必须做空安全处理
+- 可空类型参数使用 `?.let` / `?: ` 链式处理，不嵌套 if-null
+
+### 正确写法
+```kotlin
+// ✅ Framework API 返回值处理
+val service = context.getSystemService(KeyguardManager::class.java)
+val intent = activity.intent.getParcelableExtra<UserParcelable>("key")
+
+// ✅ 可空参数处理
+private fun formatMessage(msg: Message, profile: UserProfile?): String {
+    return profile?.displayName ?: "匿名用户"
+}
+
+// ✅ 链式空安全
+val cityName = user.address?.city?.name ?: "未知"
+```
+
+### 禁止写法
+```kotlin
+// ❌ !! 操作符
+val name = user!!.profile!!.displayName!!
+
+// ❌ 嵌套 if-null
+if (profile != null) {
+    if (profile.address != null) {
+        return profile.address.city
+    }
+}
+```
+
+---
+
+## 6. ViewModel 模板
+
+```kotlin
+@HiltViewModel
+class {Feature}ViewModel @Inject constructor(
+    private val getDataUseCase: Get{Feature}DataUseCase,
+    private val saveDataUseCase: Save{Feature}DataUseCase,
+    @IODispatcher private val ioDispatcher: CoroutineDispatcher,
+) : ViewModel() {
+
+    private val _uiState = MutableStateFlow({Feature}UiState())
+    val uiState: StateFlow<{Feature}UiState> = _uiState.asStateFlow()
+
+    init {
+        loadData()
+    }
+
+    fun onIntent(intent: {Feature}Intent) {
+        when (intent) {
+            is {Feature}Intent.Refresh -> loadData()
+            is {Feature}Intent.Save -> saveData(intent.data)
+        }
+    }
+
+    private fun loadData() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true) }
+            getDataUseCase()
+                .onSuccess { data ->
+                    _uiState.update { it.copy(isLoading = false, data = data, error = null) }
+                }
+                .onFailure { err ->
+                    _uiState.update { it.copy(isLoading = false, error = err as? {Feature}Error) }
+                }
+        }
+    }
+
+    private fun saveData(data: Data) { /* ... */ }
+}
+
+// Intent 和 Error 定义
+sealed interface {Feature}Intent
+sealed interface {Feature}Error
+```
+
+---
+
+## 常见 AI 错误预警
+
+| AI 常犯错误 | 本规则如何防止 |
+|---|---|
+| 暴露 MutableStateFlow | 规则第 1 节明确规定 |
+| 用 GlobalScope | 规则第 2 节禁止 |
+| 硬编码 Dispatchers.IO | 规则第 2 节强制注入 |
+| 直接修改 State 属性 | 规则第 1 节强制 update/copy |
+| 裸 try-catch | 规则第 3 节强制 Result |
+| 协程间共享可变集合 | 规则第 4 节强制 StateFlow |
+| 使用 !! 操作符 | 规则第 5 节禁止 |

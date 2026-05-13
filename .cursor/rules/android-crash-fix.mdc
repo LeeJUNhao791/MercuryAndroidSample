@@ -1,0 +1,249 @@
+# Android Crash Analysis & Bug Fix Rules
+
+## 概述
+本规则定义 Android 崩溃分析、根因推理和修复生成的系统化框架。适用于所有 Bug 修复和 Crash 修复场景。
+
+---
+
+## 1. 崩溃上下文包（Crash Context）构建规范
+
+### 强制要求
+分析崩溃时，必须构建完整的**崩溃上下文包**，包含以下 4 个要素：
+
+1. **crash_stack**：堆栈信息
+2. **source_files**：堆栈中涉及的源文件完整内容
+3. **related_types**：相关的数据类和接口定义（类型定义影响空安全判断）
+4. **recent_changes**：最近 7 天相关文件的 Git 变更（回归 Bug 识别）
+
+### 构建流程
+```
+1. 从堆栈中提取所有包前缀匹配 com.example.app 的调用帧
+2. 读取每个帧对应的 .kt 源文件完整内容（不只是堆栈中的几行）
+3. 根据源文件 import 语句找到相关数据类和接口定义
+4. 执行 git log 获取最近 7 天相关文件的变更记录
+5. 加载项目 CLAUDE.md / Rules 作为分析规范
+```
+
+### 最低上下文标准
+分析崩溃时，必须同时提供：
+- 堆栈中所有 `com.example.app.*` 帧对应的完整源文件
+- 该崩溃所在函数的调用链上游 3 层代码
+- 如果涉及数据层，必须提供相关 Entity / DTO 定义
+
+---
+
+## 2. 根因推理框架
+
+### 强制使用"因为→所以"链式推理
+
+分析崩溃时，必须按以下框架输出：
+
+```markdown
+### 1. 崩溃分类
+- 异常类型：（NPE / OOM / ANR / ClassCast / IndexOutOfBounds / ...）
+- 精确触发位置：类名 + 方法名 + 行号
+- 影响范围：（UI 线程 / 后台线程 / 全局）
+
+### 2. 根因推理链（必须填写每一项）
+- **直接原因**：哪个变量/状态在那一刻异常
+  - 例：profile 为 null
+- **为什么异常**：追溯赋值/初始化路径
+  - 例：getCurrentUser() 在 token 过期时返回 null，但没有做空判断
+- **触发条件**：什么操作/时序/状态组合导致
+  - 例：用户在 token 过期后进入聊天页
+- **是否回归**：对照 recent_changes 判断
+  - 例：最近无相关提交，不是回归问题
+
+### 3. 置信度评估
+- 高（>80%）：有完整代码上下文，触发路径明确
+- 中（50-80%）：缺少部分上下文，建议补充后再次分析
+- 低（<50%）：堆栈信息不足，暂不下结论，建议人工介入
+```
+
+---
+
+## 3. 修复方案规范
+
+### 强制要求
+每个崩溃必须提供**两个修复方案**（同时采用）：
+
+**方案 A：修复根因**
+- 消除导致异常的根本原因
+- 例：确保 token 刷新完成后再获取 profile
+
+**方案 B：防御性保护**
+- 即使根因未修复，也不崩溃
+- 例：profile?.displayName ?: "匿名用户"
+
+### 格式要求
+- 必须用 **Unified Diff 格式**输出代码变更
+- 只改必要的行，**禁止**做无关重构
+- Diff 中用 `+` 表示新增，`-` 表示删除
+- 每个方案标注 `[根因修复]` 或 `[防御性保护]`
+
+### Diff 示例
+```diff
+// ChatViewModel.kt
+
+ // ── 方案A：根因修复 ──
+-    val profile = userRepo.getCurrentUser()
++    val profile = userRepo.getCurrentUserWithRefresh()
+     // 确保 token 刷新后再取 profile
+
+ // ── 方案B：防御性保护 ──
+ private fun formatMessage(
+     msg: Message,
+-    profile: UserProfile
++    profile: UserProfile?
+ ): FormattedMessage {
+-    val senderName = profile.displayName
++    val senderName = profile?.displayName ?: "匿名用户"
+     // 即使 profile 为 null 也不崩溃
+ }
+```
+
+---
+
+## 4. 硬约束（修复时必须遵守）
+
+### 修复的绝对禁止项
+- **禁止**引入新依赖（只能使用项目已有的库）
+- **禁止**改变公开 API 签名（避免破坏调用方）
+- **禁止**破坏向后兼容性
+- **禁止**用 `!!` 作为唯一修复手段（必须配合方案 A 根因修复）
+- **禁止**生成包含 `println` / `Log.d` 的调试代码
+
+### 修复质量检查清单
+```
+[ ] 根因修复 + 防御性保护双方案都有
+[ ] Diff 格式正确，变更行数 ≤ 20 行（超过需说明）
+[ ] 没有引入新 import
+[ ] 没有改变函数签名
+[ ] 没有添加调试代码
+[ ] Kotlin 空安全语法正确（?.let / ?: / checkNotNull）
+```
+
+---
+
+## 5. 回归测试生成规范
+
+### 强制要求
+每个 Bug 修复必须生成对应的**回归测试**，测试规则：
+
+1. 必须包含一个"修复前会失败"的测试（证明 bug 确实存在）
+2. 覆盖所有已知触发条件
+3. 覆盖修复引入的新代码分支
+4. **禁止** mock 被测对象本身，只 mock 外部依赖
+5. 测试命名：`test_动作_条件_预期结果`
+
+### 测试框架标准
+- **JUnit 5** + **MockK** + **Turbine**（for Flow）
+- `runTest` 代替 `runBlocking`
+- `advanceUntilIdle()` 推进虚拟时间（处理延迟/超时）
+- `coEvery` / `coVerify` 处理 suspend 函数
+
+### 正确测试示例
+```kotlin
+class ChatViewModelCrashRegressionTest {
+
+    private lateinit var viewModel: ChatViewModel
+    private val userRepo: UserRepository = mockk()
+    private val chatRepo: ChatRepository = mockk()
+
+    @BeforeEach
+    fun setup() {
+        viewModel = ChatViewModel(userRepo, chatRepo)
+    }
+
+    // ✅ 覆盖防御性保护：profile 为 null
+    @Test
+    fun formatMessage_profileNull_returnsDefaultName() = runTest {
+        val result = viewModel.formatMessage(testMessage, null)
+        assertEquals("匿名用户", result.senderName)  // 修复前会 NPE
+    }
+
+    // ✅ 覆盖根因修复：token 刷新
+    @Test
+    fun loadMessages_tokenExpired_triggersRefresh() = runTest {
+        coEvery { userRepo.getCurrentUserWithRefresh() } coAnswers {
+            delay(100)  // 模拟刷新耗时
+            testProfile
+        }
+        coEvery { chatRepo.getMessages() } returns testMessages
+
+        viewModel.loadMessages()
+        advanceUntilIdle()
+
+        // 确认调用了带刷新的版本
+        coVerify { userRepo.getCurrentUserWithRefresh() }
+    }
+
+    // ✅ 覆盖并发场景
+    @Test
+    fun loadMessages_concurrent_noDuplicates() = runTest {
+        coEvery { userRepo.getCurrentUserWithRefresh() } coAnswers {
+            delay(50)
+            testProfile
+        }
+        coEvery { chatRepo.getMessages() } returns testMessages
+
+        launch { viewModel.loadMessages() }
+        launch { viewModel.loadMessages() }
+        advanceUntilIdle()
+
+        // 验证消息列表无重复
+        val msgs = viewModel.uiState.value.messages
+        assertEquals(msgs.distinctBy { it.id }.size, msgs.size)
+    }
+}
+```
+
+### "测了个寂寞"检测
+测试必须满足：
+```kotlin
+// ❌ 自己出题自己答（mock 被测对象）
+val result = userRepo.getUser()  // 直接调用 mock，不通过 ViewModel
+assertEquals(expected, result)  // 永远通过，什么也没测
+
+// ✅ 测真实业务逻辑
+viewModel.loadUser()   // 调用 SUT 真实方法
+advanceUntilIdle()
+assertEquals("test", viewModel.uiState.value.userName)  // 验证 ViewModel 状态变化
+```
+
+---
+
+## 6. 变更影响分析（精准测试集）
+
+### 强制要求
+在跑测试之前，先分析变更影响范围，精准推荐测试集：
+
+```markdown
+## 分析维度
+1. **直接影响**：被改函数/类的测试
+2. **上游影响**：调用了被改代码的模块
+3. **数据流**：改了 data class → 检查序列化 / API / DB 是否受影响
+4. **UI 层**：Composable 的参数/状态变了 → 检查重组行为
+
+## 输出格式
+{
+  "must_run": ["必须跑的测试类"],
+  "should_run": ["建议跑的测试类"],
+  "skip": ["可跳过的测试类（确认无关联）"],
+  "estimated_minutes": 5
+}
+```
+
+---
+
+## 常见 AI 错误预警
+
+| AI 常犯错误 | 本规则如何防止 |
+|---|---|
+| 只给堆栈不读源码 | 规则第 1 节强制完整上下文包 |
+| 推理链不完整 | 规则第 2 节强制 4 步推理框架 |
+| 只有防御性保护 | 规则第 3 节强制双方案 |
+| 引入新依赖 | 规则第 4 节硬约束禁止 |
+| 用 !! 代替根因修复 | 规则第 4 节禁止 |
+| mock 被测对象本身 | 规则第 5 节强制真实 SUT 调用 |
+| 测试不覆盖并发场景 | 规则第 5 节强制并发测试 |

@@ -93,6 +93,15 @@
         android:text="@string/speaker"
         android:textAllCaps="false" />
 
+    <!-- WeNet 语音识别功能入口（可见） -->
+    <Button
+        android:id="@+id/btnWenet"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_margin="5dp"
+        android:text="WeNet 语音识别"
+        android:textAllCaps="false" />
+
     <!-- 录音功能入口（可见） -->
     <Button
         android:id="@+id/btnAudioRecord"

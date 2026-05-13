@@ -1,0 +1,322 @@
+# Android Jetpack Compose Performance Rules
+
+## 概述
+本规则约束 Jetpack Compose 的性能相关编码规范，防止常见的重组（recomposition）性能陷阱和内存泄漏。适用于所有 Composable 文件。
+
+---
+
+## 1. 重组性能基础规范
+
+### 强制要求
+- **禁止**在 Composable 中直接调用 `suspend` 函数，必须用 `LaunchedEffect` / `rememberCoroutineScope`
+- Composable 的参数必须是 **Stable** 类型（用 `@Stable` / `@Immutable` 注解标记，或使用基本类型 / sealed class）
+- **禁止**在 Composable 参数中传入 **unstable** 类型（如普通 `data class`、普通 `class`、Lambda）
+- 状态提升到最小作用域，**禁止**不必要的状态提升导致全量重组
+
+### 正确写法
+```kotlin
+// ✅ Stable 类型：sealed class
+@Stable
+sealed interface UiState {
+    data object Loading : UiState
+    data class Content(val items: List<Item>) : UiState
+    data class Error(val message: String) : UiState
+}
+
+// ✅ Stable lambda（记得用 remember 缓存）
+@Composable
+fun GoodList(
+    items: List<Item>,
+    onItemClick: (Item) -> Unit  // Stable: 函数引用是 Stable
+) {
+    val cachedOnClick = remember(items) { onItemClick } // ✅ 按 items 缓存
+    LazyColumn {
+        items(items, key = { it.id }) { item ->
+            ListItem(item = item, onClick = cachedOnClick)
+        }
+    }
+}
+
+// ✅ LaunchedEffect 用于协程
+@Composable
+fun SearchScreen(vm: SearchViewModel = hiltViewModel()) {
+    val uiState by vm.uiState.collectAsStateWithLifecycle()
+    var query by remember { mutableStateOf("") }
+
+    LaunchedEffect(query) {
+        if (query.isNotBlank()) {
+            delay(300) // 防抖
+            vm.search(query)
+        }
+    }
+}
+```
+
+### 禁止写法
+```kotlin
+// ❌ Composable 直接调用 suspend
+@Composable
+fun Bad() {
+    val data = viewModel.loadData() // ❌ 不能直接调用
+}
+
+// ❌ unstable 参数导致全量重组
+@Composable
+fun BadList(
+    items: List<Item>,  // 普通 List 是 covariant 但内部元素可能是 unstable
+    onClick: (Item) -> Unit  // 每次重组创建新 lambda
+) {
+    // onClick 每次重组都是新引用 → 所有 Item 都重组
+}
+
+// ❌ 不使用防抖
+@Composable
+fun BadSearch() {
+    var query by remember { mutableStateOf("") }
+    LaunchedEffect(query) {
+        vm.search(query) // ❌ 每次输入都立即搜索，无防抖
+    }
+}
+```
+
+---
+
+## 2. 状态管理规范
+
+### 强制要求
+- ViewModel 用 `StateFlow<UiState>`，Composable 用 `collectAsStateWithLifecycle()` 收集
+- 一次性事件（导航、Toast）用 **Effect**（`Channel` / `SharedFlow`）而不是 State
+- 状态用 `remember` 包装，需要持久化的状态用 `rememberSaveable`
+- 避免在重组中执行副作用（IO、动画除外）
+
+### 正确写法
+```kotlin
+// ✅ UiState + Effect 分离
+@HiltViewModel
+class CartViewModel @Inject constructor(
+    private val checkoutUseCase: CheckoutUseCase
+) : ViewModel() {
+
+    private val _uiState = MutableStateFlow(CartUiState())
+    val uiState: StateFlow<CartUiState> = _uiState.asStateFlow()
+
+    // 一次性事件用 Channel
+    private val _effect = Channel<CartEffect>(Channel.BUFFERED)
+    val effect: Flow<CartEffect> = _effect.receiveAsFlow()
+
+    fun checkout() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true) }
+            checkoutUseCase()
+                .onSuccess {
+                    _effect.send(CartEffect.NavigateToSuccess)  // 一次性事件
+                }
+                .onFailure { err ->
+                    _effect.send(CartEffect.ShowError(err.message))
+                }
+                .also { _uiState.update { it.copy(isLoading = false) } }
+        }
+    }
+}
+
+// ✅ Composable 收集 Effect
+@Composable
+fun CartScreen(vm: CartViewModel = hiltViewModel()) {
+    val uiState by vm.uiState.collectAsStateWithLifecycle()
+
+    LaunchedEffect(Unit) {
+        vm.effect.collect { effect ->
+            when (effect) {
+                is CartEffect.NavigateToSuccess -> navController.navigate("success")
+                is CartEffect.ShowError -> snackbarHostState.showSnackbar(effect.message)
+            }
+        }
+    }
+}
+
+// ✅ 正确防抖
+LaunchedEffect(query) {
+    snapshotFlow { query }
+        .debounce(300)
+        .filter { it.isNotBlank() }
+        .collect { vm.search(it) }
+}
+```
+
+---
+
+## 3. LazyColumn / LazyRow 性能规范
+
+### 强制要求
+- 所有 `items` 调用必须提供 `key` 参数：`items(items, key = { it.id })`
+- **禁止**在 `items` lambda 内创建未 `remember` 的 lambda 或对象引用
+- 列表项 Composable 的参数必须稳定（Stable），避免连锁重组
+- 分页数据使用 `remember` 缓存 `LazyPagingItems`
+
+### 正确写法
+```kotlin
+// ✅ 必须提供 key
+LazyColumn {
+    items(
+        items = uiState.items,
+        key = { it.id }  // ✅ stable key
+    ) { item ->
+        ListItem(
+            item = item,  // ✅ Stable data class
+            onClick = { vm.onItemClick(item.id) }  // ✅ lambda 引用
+        )
+    }
+}
+
+// ✅ 大列表用 Paging
+@Composable
+fun ProductList(
+    pagingItems: LazyPagingItems<Product>
+) {
+    LazyColumn {
+        items(
+            count = pagingItems.itemCount,
+            key = pagingItems.itemKey { it.id }
+        ) { index ->
+            pagingItems[index]?.let { product ->
+                ProductItem(product = product)
+            }
+        }
+    }
+}
+```
+
+### 禁止写法
+```kotlin
+// ❌ 不提供 key
+items(uiState.items) { item -> /* ... */ }
+
+// ❌ items 中创建新 lambda
+items(uiState.items) { item ->
+    ListItem(item = item, onClick = { vm.onItemClick(item.id) })  // ❌ 每次重组新 lambda
+}
+
+// ✅ 应该记住 lambda
+items(
+    uiState.items,
+    key = { it.id }
+) { item ->
+    val cachedClick = remember(item.id) { { vm.onItemClick(item.id) } }
+    ListItem(item = item, onClick = cachedClick)
+}
+```
+
+---
+
+## 4. derivedStateOf 和 remember 规范
+
+### 强制要求
+- 派生计算（基于其他状态）必须用 `derivedStateOf`，**禁止**直接在 Composable 中计算
+- `remember` 的 key 参数必须包含所有影响结果的状态，**禁止**省略 key
+- 耗时计算用 `rememberSaveable` 或 `derivedStateOf` 缓存
+
+### 正确写法
+```kotlin
+// ✅ derivedStateOf 派生状态
+@Composable
+fun TodoList(tasks: List<Task>) {
+    val filter by remember { mutableStateOf(TaskFilter.ALL) }
+
+    val filteredTasks by remember(filter, tasks) {
+        derivedStateOf {
+            when (filter) {
+                TaskFilter.ALL -> tasks
+                TaskFilter.DONE -> tasks.filter { it.isDone }
+                TaskFilter.PENDING -> tasks.filter { !it.isDone }
+            }
+        }
+    }
+}
+
+// ✅ remember with keys
+@Composable
+fun UserAvatar(user: User) {
+    val avatarUrl by remember(user.id, user.avatarVersion) {
+        mutableStateOf(user.getAvatarUrl())
+    }
+    // ✅ 包含所有影响 avatarUrl 的 key
+}
+```
+
+---
+
+## 5. 内存泄漏防护
+
+### 强制要求
+- **禁止**在 `LaunchedEffect`、`rememberCoroutineScope` 中捕获 `Activity-scoped` 的 `Context`
+- **禁止**在 `companion object` 或 `static` 区域持有 View / Context 引用
+- `DisposableEffect` 中注册的资源（BroadcastReceiver、LocationListener、Flow 收集）必须在 `DisposableEffect` 的 `onDispose` 中取消
+- ViewModel 中使用 `viewModelScope`，**禁止** `GlobalScope`
+
+### 正确写法
+```kotlin
+// ✅ DisposableEffect 正确取消
+@Composable
+fun LocationScreen() {
+    val context =LocalContext.current // Activity Context ❌ 不能在 LaunchedEffect 中直接用
+
+    DisposableEffect(Unit) {
+        val listener = object : LocationListener {
+            override fun onLocationChanged(loc: Location) { /* ... */ }
+        }
+        val manager = context.getSystemService<LocationManager>()
+        manager.requestLocationUpdates(listener)
+
+        onDispose {
+            manager.removeUpdates(listener)  // ✅ 取消注册
+        }
+    }
+}
+
+// ✅ rememberCoroutineScope 用于局部协程
+@Composable
+fun PartialCoroutine() {
+    val scope = rememberCoroutineScope()
+
+    Button(onClick = {
+        scope.launch { /* 局部协程 */ }
+    }) { Text("点击") }
+}
+```
+
+### 禁止写法
+```kotlin
+// ❌ LaunchedEffect 中捕获 Activity Context
+LaunchedEffect(Unit) {
+    val activity = context as Activity  // ❌ 捕获了 Activity
+    // ...
+}
+
+// ❌ 静态区域持有 View 引用
+class BadAdapter {
+    companion object {
+        var sharedView: View? = null  // ❌ 静态持有 View
+    }
+}
+
+// ❌ DisposableEffect 未取消注册
+DisposableEffect(Unit) {
+    val receiver = BroadcastReceiver { /* ... */ }
+    context.registerReceiver(receiver)
+    // ❌ 缺少 onDispose { context.unregisterReceiver(receiver) }
+}
+```
+
+---
+
+## 常见 AI 错误预警
+
+| AI 常犯错误 | 本规则如何防止 |
+|---|---|
+| Composable 直接调用 suspend | 规则第 1 节强制 LaunchedEffect |
+| 列表项不提供 key | 规则第 3 节强制 key 参数 |
+| items lambda 未 remember | 规则第 1+3 节规范 lambda 稳定性 |
+| derivedStateOf 缺失 | 规则第 4 节强制使用 |
+| DisposableEffect 未取消注册 | 规则第 5 节强制 onDispose |
+| 捕获 Activity-scoped Context | 规则第 5 节禁止 |
+| Effect 用 State 而非 Channel | 规则第 2 节强制 Effect 分离 |

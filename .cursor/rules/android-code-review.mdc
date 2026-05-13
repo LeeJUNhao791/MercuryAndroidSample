@@ -1,0 +1,217 @@
+# Android AI Code Review Rules
+
+## 概述
+本规则定义 AI Code Review 的审查范围、严重程度分级和输出格式。适用于 PR / MR 审查和代码变更审查场景。
+
+---
+
+## 1. 审查范围
+
+### 必须审查的内容（报 bug / 架构 / 安全问题）
+
+**1.1 空指针 / 平台类型**
+- 所有 `as` 强转是否安全
+- Android Framework API 返回值（`getSystemService`、`findViewById`、`getParcelableExtra`、`getSerializableExtra`）是否做了空判断
+- nullable 类型参数的链式调用是否完整
+
+**1.2 内存泄漏**
+- 匿名内部类 / lambda 是否在 Activity / Fragment 中作为长期回调持有引用
+- `LaunchedEffect`、`remember {}` 中是否捕获了 Activity-scoped Context
+- `companion object` / 静态区域是否持有 View 或 Context 引用
+- 未在 `onDestroy` / `DisposableEffect.onDispose` 中取消的资源注册（BroadcastReceiver、LocationListener、Flow）
+
+**1.3 协程线程安全**
+- 多个协程同时修改共享可变集合（`mutableListOf` / `mutableMapOf`）是否使用了 `Mutex` 或 `StateFlow.update {}`
+- `viewModelScope` 外的协程是否安全（是否会泄漏）
+- 竞态条件：页面切换 + 快速操作导致的时序问题
+
+**1.4 架构分层违规**
+- ViewModel 是否直接调用 Repository（应走 UseCase）
+- Domain 层是否引用了 Android Framework 类型（Context、Bundle）
+- Data 层是否将 DTO 泄漏到了 Presentation 层
+
+**1.5 业务逻辑错误**
+- 状态机转换是否覆盖了所有分支
+- 乐观更新失败后是否做了回滚
+- 权限请求 / 网络状态变化的处理是否完整
+
+---
+
+## 2. 不审查的内容（交给工具处理）
+
+以下问题**不报告**，由 ktlint / detekt / linter 处理：
+- 变量命名风格（除非语义错误）
+- import 顺序
+- 注释风格 / 文档缺失
+- 行长度（超过 120 字符）
+- 无实际意义的空行
+
+以下问题**不报告**，属于个人偏好：
+- `object` vs `class` 的选择
+- `sealed class` vs `sealed interface`（功能等价时）
+- `apply` vs `also` 的选择
+- 具体 DSL 风格
+
+---
+
+## 3. 严重程度分级
+
+### 🔴 必须修复（阻塞级）
+- 会导致崩溃（ANR、NPE、ClassCast、IndexOutOfBounds）
+- 会导致数据丢失（未保存状态、未处理返回结果）
+- 安全漏洞（敏感数据未加密、日志泄露、明文密码）
+- 架构严重违规（循环依赖、违反依赖方向）
+
+### 🟡 建议修复（质量级）
+- 性能问题（主线程 IO、无防抖的密集计算、重复重组）
+- 可维护性问题（魔法数字、硬编码字符串、未处理的错误分支）
+- 测试缺失（关键路径无测试）
+
+### 🟢 可选优化（改进级）
+- 更好的 Kotlin 写法（`buildList` 替代 `mutableListOf`、`?.let` 替代嵌套 if）
+- 可读性改进（过长函数、过多参数的函数）
+- `TODO` 未完成的功能
+
+---
+
+## 4. 输出格式规范
+
+### 每个问题的标准格式
+```markdown
+**[{严重程度}]** [{文件名}:{行号}] {简短描述}
+
+{详细说明}
+
+{suggestion}
+```
+
+### 输出 JSON（用于 CI 流水线回写）
+```json
+[
+  {
+    "file": "app/src/main/java/com/example/chat/ChatViewModel.kt",
+    "line": 142,
+    "severity": "critical",
+    "message": "profile 为 null 时调用 displayName 导致 NPE",
+    "suggestion": "使用 profile?.displayName ?: \"匿名用户\""
+  },
+  {
+    "file": "app/src/main/java/com/example/chat/ChatRepository.kt",
+    "line": 28,
+    "severity": "warning",
+    "message": "网络错误未做用户友好的错误处理",
+    "suggestion": "返回 Result<ChatError> 而非直接 throw"
+  }
+]
+```
+
+---
+
+## 5. Kotlin / Android 专项检查清单
+
+### 5.1 空安全检查
+```
+检查项：
+[ ] 所有 as 强转前是否用 is 做了类型判断
+[ ] getParcelableExtra / getSerializableExtra 是否做 null 检查
+[ ] getSystemService 返回值是否判空
+[ ] !! 操作符的使用场景（允许：测试代码 / 确定非空的业务场景）
+
+标记：🔴 critical（可能导致崩溃）/ 🟡 warning（运行时可能为空）
+```
+
+### 5.2 Compose 性能检查
+```
+检查项：
+[ ] LazyColumn/LazyRow 的 items 是否提供 key 参数
+[ ] Composable 参数是否包含 unstable 类型（普通 data class）
+[ ] derivedStateOf 是否缺失（派生计算直接写在 Composable 中）
+[ ] LaunchedEffect 是否缺少防抖（debounce）
+
+标记：🟡 warning（性能影响）/ 🟢 info（可优化）
+```
+
+### 5.3 协程安全检查
+```
+检查项：
+[ ] 是否有 GlobalScope 使用
+[ ] 是否硬编码 Dispatchers.IO（应注入）
+[ ] 共享可变集合（mutableListOf）是否被多协程访问
+[ ] 是否有未取消的协程（onCleared / DisposableEffect onDispose 缺失）
+
+标记：🔴 critical（线程安全）/ 🟡 warning（资源泄漏）
+```
+
+### 5.4 最佳实践检查
+```
+检查项：
+[ ] ViewModel 是否暴露 MutableStateFlow（应只暴露 StateFlow）
+[ ] Repository 方法是否返回 Result（禁止裸 throw）
+[ ] 是否使用了 sealed interface / sealed class 定义状态和错误
+[ ] 是否可以使用 value class 包装原始类型增强类型安全
+
+标记：🟡 warning（可维护性）/ 🟢 info（改进建议）
+```
+
+---
+
+## 6. 误报处理（"不要报什么"）
+
+以下场景**不报告**（不是 Bug）：
+
+```markdown
+## 不报告的场景
+- Hilt `@Provides` 函数中未使用的参数（DI 框架正常模式）
+- `@Binds` 抽象方法没有 body（正常模式）
+- `BuildConfig` 字段的硬编码字符串（Gradle 编译期注入）
+- 测试代码（`src/test/` 目录）中的 `!!` 操作符（测试允许 force unwrap）
+- 注解处理器生成的代码（Room DB、DataStore 的 `Impl` 实现类）
+- `Application` 类中的 `onCreate` 持有 Application Context（这是唯一正确的做法）
+- `LocalContext.current` 在 Composable 中的使用（CompositionLocal 机制）
+```
+
+---
+
+## 7. Review Prompt 模板
+
+当 AI 执行代码审查时，使用以下 prompt 框架：
+
+```
+你是 Android 代码审查专家，熟悉 Kotlin 协程、Jetpack Compose、
+Hilt DI 和 Android 架构组件。请严格按以下规则审查变更。
+
+## 项目规则（从 CLAUDE.md 加载）
+{rules}
+
+## 审查变更文件
+{changed_files}
+
+## Diff 内容
+{diff}
+
+## 审查要求
+1. 只报告 bug / 架构 / 安全问题，不报风格偏好
+2. 每个问题必须指明 文件名:行号
+3. 按三级分类：critical / warning / info
+4. 只报告真实问题，不报告误报场景（参见"不报告的场景"列表）
+5. 输出 JSON 格式数组
+
+## 不报告的场景
+- Hilt Module 中 @Provides 参数未使用
+- BuildConfig 字段的硬编码
+- 测试代码中的 !! 操作符
+- 注解处理器生成的 Impl 类
+```
+
+---
+
+## 常见 AI 误报预警
+
+| AI 常误报为问题 | 实际情况 | 本规则如何防止 |
+|---|---|---|
+| Hilt `@Provides` 参数未使用 | DI 框架标准模式 | 规则第 6 节明确不报告 |
+| 测试中 `user!!` | 测试代码允许 force unwrap | 规则第 6 节明确不报告 |
+| `BuildConfig.API_URL` 硬编码 | Gradle 编译期注入 | 规则第 6 节明确不报告 |
+| Room `Impl` 类未实现方法 | 注解处理器生成 | 规则第 6 节明确不报告 |
+| 建议用 LiveData 替代 StateFlow | 项目早已迁移 StateFlow | 规则明确用项目规则驱动 |
+| 建议增加空判断（已存在） | 代码中已有判断 | 必须读完整文件上下文 |

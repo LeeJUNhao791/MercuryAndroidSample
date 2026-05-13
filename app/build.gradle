@@ -6,6 +6,7 @@ plugins {
 android {
     namespace 'com.ffalcon.mercury.android.sdk.demo'
     compileSdk 35
+    ndkVersion '21.1.6352462'
 
     defaultConfig {
         applicationId "com.ffalcon.mercury.android.sdk"
@@ -41,6 +42,45 @@ android {
     buildFeatures {
         viewBinding = true
     }
+
+    packagingOptions {
+        pickFirst 'lib/arm64-v8a/libc++_shared.so'
+        pickFirst 'lib/armeabi-v7a/libc++_shared.so'
+        pickFirst 'lib/x86/libc++_shared.so'
+        pickFirst 'lib/x86_64/libc++_shared.so'
+    }
+
+    configurations {
+        extractForNativeBuild
+    }
+
+    defaultConfig {
+        applicationId "com.ffalcon.mercury.android.sdk"
+        minSdk 29
+        targetSdk 31
+        versionCode 1
+        versionName "1.0.1"
+
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+
+        externalNativeBuild {
+            cmake {
+                targets  'wenet'
+                cppFlags '-std=c++14', '-DC10_USE_GLOG', '-DC10_USE_MINIMAL_GLOG', '-DANDROID', '-Wno-c++11-narrowing', '-fexceptions'
+            }
+        }
+
+        ndk {
+            abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            version '3.18.1'
+            path "src/main/cpp/CMakeLists.txt"
+        }
+    }
 }
 
 dependencies {
@@ -58,10 +98,39 @@ dependencies {
     implementation 'com.github.jenly1314:camera-scan:1.4.1'
     implementation 'com.github.jenly1314:viewfinderview:1.4.0'
 
+    implementation 'org.pytorch:pytorch_android:1.13.0'
+    extractForNativeBuild 'org.pytorch:pytorch_android:1.13.0'
+    implementation 'com.github.pengzhendong:wenet-openfst-android:1.0.2'
+    extractForNativeBuild 'com.github.pengzhendong:wenet-openfst-android:1.0.2'
+
     // 本地单元测试依赖（运行在 JVM 上）
     testImplementation 'junit:junit:4.13.2'
 
     // Android 仪器化测试依赖（运行在设备或模拟器上）
     androidTestImplementation 'androidx.test.ext:junit:1.1.5'
     androidTestImplementation 'androidx.test.espresso:espresso-core:3.5.1'
-}
+    }
+
+    task extractAARForNativeBuild {
+        doLast {
+            configurations.extractForNativeBuild.files.each {
+                def file = it.absoluteFile
+                def filename = file.name
+                // 移除 .aar 扩展名作为目录名
+                def extractDir = "$buildDir/${filename.replace('.aar', '')}"
+                copy {
+                    from zipTree(file)
+                    into extractDir
+                    include 'headers/**'
+                    include 'jni/**'
+                }
+                println "Extracted $filename to $extractDir"
+            }
+        }
+    }
+
+    tasks.whenTaskAdded { task ->
+    if (task.name.contains('externalNativeBuild')) {
+        task.dependsOn(extractAARForNativeBuild)
+    }
+    }

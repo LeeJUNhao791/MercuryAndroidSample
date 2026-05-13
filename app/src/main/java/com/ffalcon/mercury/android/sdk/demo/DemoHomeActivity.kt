@@ -105,6 +105,11 @@ class DemoHomeActivity : BaseMirrorActivity<LayoutDemoHomeBinding>() {
                 startActivity(Intent(this@DemoHomeActivity, VoiceRecognitionActivity::class.java))
             }
 
+            // WeNet 语音识别
+            addVisibleFocusTarget(btnWenet) {
+                startActivity(Intent(this@DemoHomeActivity, com.mobvoi.wenet.WenetActivity::class.java))
+            }
+
             // 3. 录音与播放
             addVisibleFocusTarget(btnAudioRecord) {
                 startActivity(Intent(this@DemoHomeActivity, AudioRecordPlayActivity::class.java))

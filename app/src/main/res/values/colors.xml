@@ -11,4 +11,9 @@
     <color name="rv_scroll_bar_ThumbVertical">#FFFFFFFF</color>
     <color name="rv_scroll_bar_TrackVertical">#99FFFFFF</color>
 
+    <!-- WeNet colors -->
+    <color name="green">#FF00FF00</color>
+    <color name="top_color">#FF00FF00</color>
+    <color name="down_color">#FF007F00</color>
+
 </resources>

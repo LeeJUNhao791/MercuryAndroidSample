@@ -1,0 +1,281 @@
+# Android Clean Architecture & Repository Rules
+
+## 概述
+本规则约束 Android 项目的架构分层、模块划分、依赖方向和命名规范。适用于所有 Kotlin 源码文件。
+
+---
+
+## 1. Clean Architecture 分层
+
+```
+┌─────────────────────────────────────────┐
+│          Presentation Layer              │
+│  (Screen/Composable, ViewModel, Intent) │
+├─────────────────────────────────────────┤
+│             Domain Layer                 │
+│  (UseCase, Repository Interface, Model) │
+├─────────────────────────────────────────┤
+│              Data Layer                  │
+│  (RepositoryImpl, Api, Dao, DTO)        │
+└─────────────────────────────────────────┘
+```
+
+### 强制要求
+- **依赖方向**：Presentation → Domain ← Data，Domain 层不依赖任何外部模块
+- **Repository 接口**定义在 `domain/` 包，实现放在 `data/` 包
+- **UseCase** 是业务逻辑的最小单位，一个 UseCase 只做一件事
+- **禁止**在 ViewModel 中直接调用 `Repository`，必须通过 UseCase
+- **禁止**在 Domain 层使用 Android Framework 类型（如 `Context`、`Bundle`）
+
+### 正确分层
+```kotlin
+// ✅ domain/ChatRepository.kt（接口）
+interface ChatRepository {
+    suspend fun getMessages(): Result<List<Message>>
+    suspend fun sendMessage(text: String): Result<Message>
+}
+
+// ✅ domain/GetMessagesUseCase.kt
+class GetMessagesUseCase @Inject constructor(
+    private val repository: ChatRepository  // 依赖接口，不依赖实现
+) {
+    suspend operator fun invoke(): Result<List<Message>> = repository.getMessages()
+}
+
+// ✅ data/ChatRepositoryImpl.kt（实现）
+class ChatRepositoryImpl @Inject constructor(
+    private val api: ChatApi,
+    private val dao: MessageDao,
+    @IODispatcher private val ioDispatcher: CoroutineDispatcher
+) : ChatRepository {
+    override suspend fun getMessages(): Result<List<Message>> = runCatching {
+        // ...
+    }
+}
+
+// ✅ ViewModel 正确调用链
+class ChatViewModel @Inject constructor(
+    private val getMessagesUseCase: GetMessagesUseCase,  // ✅ 通过 UseCase
+    private val sendMessageUseCase: SendMessageUseCase
+) : ViewModel() {
+    // 不直接持有 ChatRepository
+}
+```
+
+### 禁止写法
+```kotlin
+// ❌ Data 层暴露实现细节给 Domain
+// domain/UserRepository.kt
+class UserRepositoryImpl( // ❌ 实现在 domain 层
+    private val context: Context // ❌ Android 类型在 domain 层
+)
+
+// ❌ ViewModel 直接调 Repository
+class BadViewModel : ViewModel() {
+    @Inject lateinit var repo: ChatRepository // ❌ 应该走 UseCase
+    fun load() {
+        viewModelScope.launch {
+            repo.getMessages() // ❌ 直接调 Repository
+        }
+    }
+}
+```
+
+---
+
+## 2. 模块结构规范
+
+### 标准 feature 模块结构
+```
+feature/
+└── chat/
+    ├── ui/
+    │   ├── ChatScreen.kt          # Composable 界面
+    │   ├── ChatViewModel.kt       # ViewModel
+    │   └── state/
+    │       ├── ChatUiState.kt
+    │       ├── ChatIntent.kt
+    │       └── ChatEffect.kt      # 一次性事件（导航、Toast）
+    ├── domain/
+    │   ├── ChatRepository.kt      # 接口
+    │   ├── GetMessagesUseCase.kt
+    │   └── SendMessageUseCase.kt
+    └── data/
+        ├── ChatRepositoryImpl.kt  # 实现
+        └── dto/
+            └── ChatDto.kt
+```
+
+### 核心模块结构
+```
+core/
+├── network/
+│   ├── ApiClient.kt
+│   └── ApiResult.kt
+├── database/
+│   └── AppDatabase.kt
+├── di/
+│   ├── NetworkModule.kt
+│   └── DispatcherModule.kt
+└── common/
+    └── extensions/
+```
+
+### 强制要求
+- **按功能（feature）组织代码**，不按层（viewmodel/、repo/）组织
+- Feature 包名用**小写**（`chat/`、`profile/`、`search/`）
+- 类名用 **PascalCase**，接口名以 `I` 开头或以 `-able` 结尾（`ChatRepository`）
+- 每个 feature 目录下的 CLAUDE.md 描述本模块的特殊业务规则
+
+---
+
+## 3. Repository 实现规范
+
+### 强制要求
+- Repository 实现类用 `@Inject constructor` 注入依赖
+- 所有 IO 操作（网络、数据库、文件）使用 `@IODispatcher`
+- 返回类型统一用 `Result<T>`，不使用 `throw`
+- 本地缓存优先策略：读取时先查本地，再请求网络
+- 分页数据用 `PagingSource` + `RemoteMediator`，不用一次性加载
+
+### 正确写法
+```kotlin
+class ChatRepositoryImpl @Inject constructor(
+    private val api: ChatApi,
+    private val dao: MessageDao,
+    @IODispatcher private val ioDispatcher: CoroutineDispatcher
+) : ChatRepository {
+
+    override suspend fun getMessages(): Result<List<Message>> = runCatching {
+        withContext(ioDispatcher) {
+            // 1. 先读缓存
+            val cached = dao.getMessages().ifEmpty {
+                // 2. 缓存为空，请求网络
+                val remote = api.getMessages().also { msgs ->
+                    dao.insertMessages(msgs) // 写缓存
+                }
+                remote
+            }
+            cached
+        }
+    }
+
+    override suspend fun sendMessage(text: String): Result<Message> = runCatching {
+        withContext(ioDispatcher) {
+            val msg = api.sendMessage(SendMessageRequest(text))
+            dao.insertMessage(msg) // 乐观更新本地缓存
+            msg
+        }
+    }
+}
+```
+
+---
+
+## 4. DTO / DataModel 转换规范
+
+### 强制要求
+- **禁止**在 UI 层直接使用 DTO，所有数据必须经过 Mapper 转换
+- Mapper 用 `extension function` 或 `Mapstruct`，放在 `data/mapper/` 目录
+- 转换必须是**单向**的：DTO → DomainModel，**禁止** DomainModel → DTO
+
+### 正确写法
+```kotlin
+// ✅ DTO
+data class UserDto(
+    val user_id: String,
+    val user_name: String,
+    val avatar_url: String?
+)
+
+// ✅ Domain Model
+data class User(
+    val id: String,
+    val name: String,
+    val avatarUrl: String?
+)
+
+// ✅ Mapper（extension function）
+fun UserDto.toDomain(): User = User(
+    id = user_id,
+    name = user_name,
+    avatarUrl = avatar_url
+)
+
+// ✅ Repository 使用 Mapper
+override suspend fun getUser(id: String): Result<User> = runCatching {
+    api.getUser(id).toDomain()  // ✅ DTO → Domain
+}
+```
+
+### 禁止写法
+```kotlin
+// ❌ 在 Screen 里直接用 DTO
+@Composable
+fun BadScreen(data: UserDto) { // ❌ DTO 泄漏到 Presentation
+}
+
+// ❌ 转换逻辑散落在各处
+val user = api.getUser(id)
+val name = user.user_name  // ❌ 散落转换
+```
+
+---
+
+## 5. DI 模块规范
+
+### 强制要求
+- 使用 Hilt，Module 用 `@InstallIn` 注解
+- ViewModel 的 Module 用 `@Binds` 绑定接口，用 `@Provides` 提供值
+- **禁止**在 Module 中直接 `new` 对象，所有依赖通过注入获得
+
+### 正确写法
+```kotlin
+// ✅ Repository Binds
+@Module
+@InstallIn(SingletonComponent::class)
+abstract class RepositoryModule {
+    @Binds
+    @Singleton
+    abstract fun bindChatRepository(
+        impl: ChatRepositoryImpl
+    ): ChatRepository
+}
+
+// ✅ CoroutineDispatcher 注入
+@Module
+@InstallIn(SingletonComponent::class)
+object DispatcherModule {
+    @Provides
+    @IODispatcher
+    fun provideIODispatcher(): CoroutineDispatcher = Dispatchers.IO
+}
+
+// ✅ ViewModelFactory（Hilt 自动生成，一般不需要手动写）
+// Hilt 会自动生成 @HiltViewModel annotated ViewModels
+```
+
+---
+
+## 6. 常用 import 别名（配置到 IDE）
+
+为减少样板代码，建议在 `import` 部分使用类型别名：
+
+```kotlin
+// 在 core/common/TypeAlias.kt
+typealias AppResult<T> = Result<T>
+typealias AppState<T> = StateFlow<T>
+```
+
+---
+
+## 常见 AI 错误预警
+
+| AI 常犯错误 | 本规则如何防止 |
+|---|---|
+| ViewModel 直接调 Repository | 规则第 1 节强制 UseCase 桥接 |
+| Domain 层使用 Context | 规则第 1 节禁止 Android 类型 |
+| 按层组织 feature 包 | 规则第 2 节强制按功能组织 |
+| DTO 泄漏到 UI 层 | 规则第 4 节强制 Mapper |
+| Repository 直接 throw | 规则第 3 节强制 Result 返回 |
+| Module 中 new 对象 | 规则第 5 节强制注入 |
