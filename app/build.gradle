@@ -130,7 +130,7 @@ dependencies {
     }
 
     tasks.whenTaskAdded { task ->
-    if (task.name.contains('externalNativeBuild')) {
-        task.dependsOn(extractAARForNativeBuild)
-    }
+        if (task.name.contains('externalNativeBuild')) {
+            task.dependsOn(extractAARForNativeBuild)
+        }
     }

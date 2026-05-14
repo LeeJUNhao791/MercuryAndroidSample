@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.util.Log
+import android.view.TextureView
 import android.view.View
 import android.widget.Toast
 import androidx.core.app.ActivityCompat
@@ -15,7 +16,7 @@ import com.ffalcon.mercury.android.sdk.demo.R
 import com.ffalcon.mercury.android.sdk.demo.databinding.LayoutQrcodeScanningBinding
 import com.ffalcon.mercury.android.sdk.focus.reqFocus
 import com.ffalcon.mercury.android.sdk.touch.TempleAction
-import com.ffalcon.mercury.android.sdk.ui.activity.BaseMirrorActivity
+import com.ffalcon.mercury.android.sdk.ui.activity.BaseEventActivity
 import com.ffalcon.mercury.android.sdk.ui.toast.FToast
 import com.ffalcon.mercury.android.sdk.ui.util.FixPosFocusTracker
 import com.ffalcon.mercury.android.sdk.ui.util.FocusHolder
@@ -33,8 +34,13 @@ import kotlinx.coroutines.launch
  * 
  * 支持多种条码格式的扫描：QR Code、Code 128、Code 39、EAN-13 等
  * 使用 ML Kit 进行条码识别，集成相机预览和 temple 触摸板控制
+ * 
+ * 注意：继承自 BaseEventActivity，使用 MirroringView 实现双目同步显示
  */
-class QrcodeScanningActivity : BaseMirrorActivity<LayoutQrcodeScanningBinding>() {
+class QrcodeScanningActivity : BaseEventActivity() {
+
+    /** 视图绑定对象 */
+    private lateinit var binding: LayoutQrcodeScanningBinding
 
     /** 固定位置焦点追踪器，用于管理返回按钮的焦点 */
     private var fixPosFocusTracker: FixPosFocusTracker? = null
@@ -55,6 +61,10 @@ class QrcodeScanningActivity : BaseMirrorActivity<LayoutQrcodeScanningBinding>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 初始化视图绑定
+        binding = LayoutQrcodeScanningBinding.inflate(layoutInflater)
+        setContentView(binding.root)
+
         // 初始化焦点目标（返回按钮）
         initFocusTarget()
         // 初始化事件监听（temple 触摸板事件）
@@ -74,30 +84,26 @@ class QrcodeScanningActivity : BaseMirrorActivity<LayoutQrcodeScanningBinding>()
         // 创建焦点持有者，参数 true 表示允许循环聚焦
         val focusHolder = FocusHolder(true)
         
-        // 设置双目视图配置
-        mBindingPair.updateView {
-            // 注册返回按钮的焦点信息
-            focusHolder.addFocusTarget(
-                FocusInfo(
-                    btnBack,
-                    // 事件处理器：处理 temple 触摸板的输入事件
-                    eventHandler = { action ->
-                        when (action) {
-                            is TempleAction.Click -> finish()  // 单击返回
-                            else -> Unit
-                        }
-                    },
-                    // 焦点变化处理器：更新按钮视觉效果
-                    focusChangeHandler = { hasFocus ->
-                        mBindingPair.updateView {
-                            triggerFocus(hasFocus, btnBack)
-                        }
+        // 注册返回按钮的焦点信息
+        focusHolder.addFocusTarget(
+            FocusInfo(
+                binding.btnBack,
+                // 事件处理器：处理 temple 触摸板的输入事件
+                eventHandler = { action ->
+                    when (action) {
+                        is TempleAction.Click -> finish()  // 单击返回
+                        else -> Unit
                     }
-                )
+                },
+                // 焦点变化处理器：更新按钮视觉效果
+                focusChangeHandler = { hasFocus ->
+                    triggerFocus(hasFocus, binding.btnBack)
+                    triggerFocus(hasFocus, binding.btnBackRight)
+                }
             )
-            // 设置返回按钮为当前焦点
-            focusHolder.currentFocus(mBindingPair.left.btnBack)
-        }
+        )
+        // 设置返回按钮为当前焦点
+        focusHolder.currentFocus(binding.btnBack)
 
         // 创建并激活固定位置焦点追踪器
         fixPosFocusTracker = FixPosFocusTracker(focusHolder).apply {
@@ -173,14 +179,6 @@ class QrcodeScanningActivity : BaseMirrorActivity<LayoutQrcodeScanningBinding>()
 
     /**
      * 权限请求结果回调
-     * 
-     * 处理相机权限请求的结果：
-     * - 如果用户授予权限，启动相机扫描
-     * - 如果用户拒绝权限，显示提示并退出页面
-     * 
-     * @param requestCode 请求码（与 requestPermissions 中的 code 对应）
-     * @param permissions 请求的权限数组
-     * @param grantResults 权限授予结果数组
      */
     override fun onRequestPermissionsResult(
         requestCode: Int,
@@ -204,60 +202,68 @@ class QrcodeScanningActivity : BaseMirrorActivity<LayoutQrcodeScanningBinding>()
 
     /**
      * 启动相机扫描
-     * 
-     * 初始化并启动相机预览和条码分析功能：
-     * - 配置扫描器支持多种条码格式
-     * - 启用声音和震动反馈
-     * - 设置自动停止分析和结果回调
-     * - 启动相机并开始分析图像
      */
     private fun startCameraScan() {
-        mBindingPair.updateView {
-            try {
-                // 如果相机扫描器已存在，重新启用分析
-                if (cameraScan != null) {
-                    cameraScan?.setAnalyzeImage(true)
-                    return@updateView
-                }
+        try {
+            // 如果相机扫描器已存在，重新启用分析
+            if (cameraScan != null) {
+                cameraScan?.setAnalyzeImage(true)
+                return
+            }
 
-                // 创建并配置相机扫描器
-                cameraScan = BaseCameraScan<List<Barcode>>(
-                    this@QrcodeScanningActivity,
-                    previewView  // 相机预览视图
-                ).apply {
-                    setPlayBeep(true)  // 启用扫描成功时的声音提示
-                    setVibrate(true)   // 启用扫描成功时的震动反馈
-                    setAutoStopAnalyze(true)  // 扫描成功后自动停止分析
-                    setAnalyzeImage(true)     // 开始分析图像
-                    setAnalyzer(createBarcodeAnalyzer())  // 设置条码分析器
-                    // 设置扫描结果回调
-                    setOnScanResultCallback { result ->
-                        onScanResultCallback(result)
-                    }
-                    startCamera()  // 启动相机
+            // 创建并配置相机扫描器
+            cameraScan = BaseCameraScan<List<Barcode>>(
+                this,
+                binding.previewView  // 相机预览视图
+            ).apply {
+                setPlayBeep(true)  // 启用扫描成功时的声音提示
+                setVibrate(true)   // 启用扫描成功时的震动反馈
+                setAutoStopAnalyze(true)  // 扫描成功后自动停止分析
+                setAnalyzeImage(true)     // 开始分析图像
+                setAnalyzer(createBarcodeAnalyzer())  // 设置条码分析器
+                // 设置扫描结果回调
+                setOnScanResultCallback { result ->
+                    onScanResultCallback(result)
                 }
-            } catch (e: Exception) {
-                // 相机启动失败，记录错误并显示提示
-                Log.e(TAG, "Camera start failed", e)
-                Toast.makeText(
-                    this@QrcodeScanningActivity,
-                    "Camera start failed: ${e.message}",
-                    Toast.LENGTH_LONG
-                ).show()
+                startCamera()  // 启动相机
+            }
+
+            // 配置双目镜像显示
+            setupMirroring()
+
+        } catch (e: Exception) {
+            // 相机启动失败，记录错误并显示提示
+            Log.e(TAG, "Camera start failed", e)
+            Toast.makeText(
+                this,
+                "Camera start failed: ${e.message}",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
+    /**
+     * 配置双目镜像显示
+     * 
+     * 将左眼的 PreviewView 画面镜像到右眼的 MirroringView
+     */
+    private fun setupMirroring() {
+        // 等待 PreviewView 加载完成并确保其子视图（TextureView）已创建
+        binding.previewView.post {
+            // PreviewView 在 compatible 模式下使用 TextureView 作为第一个子视图
+            val textureView = binding.previewView.getChildAt(0) as? TextureView
+            if (textureView != null) {
+                // 设置镜像源并开始镜像
+                binding.mirrorView.setSource(textureView)
+                binding.mirrorView.startMirroring()
+            } else {
+                Log.e(TAG, "Failed to find TextureView in PreviewView")
             }
         }
     }
 
     /**
      * 创建条码分析器
-     * 
-     * 配置支持的条码格式，包括：
-     * - QR Code（二维码）
-     * - Code 128、Code 39、Code 93、Codabar（一维码）
-     * - EAN-13、EAN-8、UPC-A、UPC-E（商品条码）
-     * - ITF（交叉二五码）
-     * 
-     * @return 配置好的条码扫描分析器
      */
     private fun createBarcodeAnalyzer(): BarcodeScanningAnalyzer {
         return BarcodeScanningAnalyzer(
@@ -276,20 +282,12 @@ class QrcodeScanningActivity : BaseMirrorActivity<LayoutQrcodeScanningBinding>()
 
     /**
      * 扫描结果回调
-     * 
-     * 处理相机扫描器返回的分析结果：
-     * - 如果正在显示结果，忽略新的扫描结果
-     * - 提取第一个识别到的条码内容
-     * - 如果结果为空，重启扫描
-     * - 如果结果有效，显示结果并在 2 秒后重启扫描
-     * 
-     * @param result 分析结果，包含识别到的条码列表
      */
     private fun onScanResultCallback(result: AnalyzeResult<List<Barcode>>) {
         // 如果正在显示结果，忽略新的扫描结果，避免重复显示
         if (isShowingResult) return
 
-        // 提取第一个识别到的条码内容（优先使用 displayValue，否则使用 rawValue）
+        // 提取第一个识别到的条码内容
         val text = result.result
             ?.firstOrNull()
             ?.let { barcode -> barcode.displayValue ?: barcode.rawValue }
@@ -310,37 +308,27 @@ class QrcodeScanningActivity : BaseMirrorActivity<LayoutQrcodeScanningBinding>()
 
     /**
      * 显示扫描结果（带超时自动隐藏）
-     * 
-     * 在眼镜屏幕上显示扫描结果，2 秒后自动隐藏并重启扫描：
-     * - 显示结果文本和成功提示
-     * - 延迟 2 秒
-     * - 隐藏结果并清空文本
-     * - 重置状态标志，重启扫描
-     * 
-     * @param text 扫描到的条码内容
      */
     private fun showResultWithTimeout(text: String) {
-        // 如果正在显示结果，避免重复显示
         if (isShowingResult) return
 
         isShowingResult = true
         lifecycleScope.launch {
-            // 在双目显示中更新视图，显示扫描结果
-            mBindingPair.updateView {
-                tvResult.visibility = View.VISIBLE
-                tvResult.text = "Scan result:\n$text"
-                // 在眼镜上显示成功提示
-                FToast.show("Scan success")
-            }
+            // 更新 UI 显示扫描结果
+            binding.tvResult.visibility = View.VISIBLE
+            binding.tvResult.text = "Scan result:\n$text"
+            binding.tvResultRight.visibility = View.VISIBLE
+            binding.tvResultRight.text = "Scan result:\n$text"
+            FToast.show("Scan success")
 
             // 延迟 2 秒后隐藏结果
             delay(2000)
 
             // 隐藏结果视图并清空文本
-            mBindingPair.updateView {
-                tvResult.visibility = View.GONE
-                tvResult.text = ""
-            }
+            binding.tvResult.visibility = View.GONE
+            binding.tvResult.text = ""
+            binding.tvResultRight.visibility = View.GONE
+            binding.tvResultRight.text = ""
 
             // 重置状态标志
             isShowingResult = false
@@ -351,36 +339,26 @@ class QrcodeScanningActivity : BaseMirrorActivity<LayoutQrcodeScanningBinding>()
 
     /**
      * 重启扫描
-     * 
-     * 重新启动相机图像分析，继续扫描新的条码
-     * 在显示结果后或扫描失败后调用
      */
     private fun restartScanning() {
         try {
-            // 重新启用图像分析
             cameraScan?.setAnalyzeImage(true)
         } catch (e: Exception) {
-            // 重启扫描失败，记录错误
             Log.e(TAG, "Restart scan failed", e)
         }
     }
 
     /**
      * 销毁活动时的资源清理
-     * 
-     * 停止相机并释放相关资源，避免内存泄漏：
-     * - 停止相机预览
-     * - 清空相机扫描器引用
-     * - 捕获异常防止崩溃
      */
     override fun onDestroy() {
+        // 停止镜像功能
+        binding.mirrorView.stopMirroring()
         try {
             // 停止相机
             cameraScan?.stopCamera()
-            // 清空引用，帮助垃圾回收
             cameraScan = null
         } catch (e: Exception) {
-            // 释放相机失败，记录错误
             Log.e(TAG, "Release camera failed", e)
         }
         super.onDestroy()

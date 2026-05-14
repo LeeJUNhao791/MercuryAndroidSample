@@ -3,6 +3,8 @@
 ## 概述
 本规则约束 Android 项目的架构分层、模块划分、依赖方向和命名规范。适用于所有 Kotlin 源码文件。
 
+**眼镜 AR 项目说明**：本规则**完全适用于**眼镜项目。眼镜端 UI 页面（`BaseMirrorActivity`）属于 Presentation 层，数据流向与普通 Android 应用完全一致：Presentation → Domain ← Data。ViewBinding 替代 Compose 作为视图层实现，不影响 Clean Architecture 约束。
+
 ---
 
 ## 1. Clean Architecture 分层

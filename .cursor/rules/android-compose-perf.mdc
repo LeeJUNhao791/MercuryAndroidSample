@@ -3,6 +3,8 @@
 ## 概述
 本规则约束 Jetpack Compose 的性能相关编码规范，防止常见的重组（recomposition）性能陷阱和内存泄漏。适用于所有 Composable 文件。
 
+**眼镜 AR 项目说明**：本规则**仅适用于手机端 UI**（使用 `BaseEventActivity` 的页面）。眼镜端 UI（使用 `BaseMirrorActivity` 的页面）**不适用**本规则，眼镜端使用 ViewBinding，具体规范参见 `glasses-ui-dev.mdc`。
+
 ---
 
 ## 1. 重组性能基础规范

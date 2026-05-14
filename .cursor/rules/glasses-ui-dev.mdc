@@ -1,0 +1,1284 @@
+# RayNeo AR Glasses UI Development Rules
+
+## 概述
+
+本规则约束在 RayNeo X2 / X3 AR 眼镜上开发 UI 界面的所有规范。眼镜上的应用与普通 Android 手机应用有本质区别：**没有触控屏**，用户通过眼镜镜腿（temple）上的触摸板进行所有交互，所有界面内容以**双目显示**（左眼 + 右眼同步镜像）方式呈现。
+
+适用项目：`MercuryAndroidSDK` Demo 及基于该 SDK 开发的所有眼镜应用。
+
+---
+
+## 0. 技术栈兼容性说明
+
+### 眼镜 SDK 约束（关键）
+
+| 技术项 | 约束值 | 说明 |
+|---|---|---|
+| **UI 框架** | **ViewBinding / XML 布局** | SDK 提供的 `BaseMirrorActivity` 基于 ViewBinding，**不支持 Jetpack Compose** |
+| **编译 SDK** | `compileSdk 35`（Demo 中） | 实际眼镜设备建议不超过 35 |
+| **最低 SDK** | `minSdk 29` | Android 10 起 |
+| **目标 SDK** | `targetSdk 31` | 眼镜平台锁定，不应随意升级 |
+| **Kotlin 版本** | `1.7.x` | Demo 中使用，不建议升级到更高版本 |
+| **Java 字节码** | `JavaVersion 1.8` | `jvmTarget = '1.8'` |
+| **屏幕方向** | **横屏（landscape）** | 所有 Activity 在 Manifest 中锁定为 `screenOrientation="landscape"` |
+| **显示方式** | 双目镜像（binocular） | 左眼 / 右眼显示完全相同内容 |
+
+### Jetpack Compose 是否可用？
+
+**结论：不可用。** 原因如下：
+
+1. SDK 提供的所有基础 Activity（`BaseMirrorActivity`、`BaseEventActivity`）均基于 ViewBinding，框架层未提供 Compose 集成。
+2. 双目镜像功能（`mBindingPair`、`ViewPair`）是 ViewBinding 体系的一等公民，Compose 无法直接使用。
+3. 焦点系统（`FixPosFocusTracker`、`FocusHolder`、`FocusInfo`）绑定到具体 `View` 实例，与 Compose 的声明式模型不兼容。
+4. SDK 中大量扩展方法（如 `make3DEffectForSide`、`setViewVisible`、`dp`）是 View 的扩展函数。
+5. RecyclerView 滑动追踪器（`RecyclerViewSlidingTracker`）基于 Android RecyclerView，与 Compose LazyColumn 不兼容。
+
+如果必须使用 Compose，只能在**手机端**（Phone UI）使用眼镜端仍用 ViewBinding。实际项目中请**以 ViewBinding + XML 布局为主**。
+
+---
+
+## 1. Activity 选型规范
+
+### 三种基础 Activity
+
+眼镜应用根据是否有双目显示需求，分为三类：
+
+| Activity | 使用场景 | 特点 |
+|---|---|---|
+| `BaseMirrorActivity<T>` | **眼镜端 UI（99%场景）** | 双目镜像显示，管理左/右眼 `ViewBinding` 对 |
+| `BaseEventActivity` | 手机端 UI / Fragment 容器 | 单屏显示，不做镜像 |
+| 标准 `AppCompatActivity` | 无关紧要的非眼镜页面 | 不使用 SDK 功能 |
+
+### 强制要求
+
+- **眼镜端页面**必须继承 `BaseMirrorActivity<Binding>`，禁止继承 `AppCompatActivity`
+- 布局文件必须使用 **ViewBinding**（`buildFeatures.viewBinding = true`）
+- 所有眼镜端 Activity 必须在 Manifest 中声明 `screenOrientation="landscape"`
+
+### 正确写法
+
+```kotlin
+// ✅ 眼镜端 Activity
+class MyGlassesActivity : BaseMirrorActivity<ActivityMyBinding>() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        // SDK 自动设置左右眼绑定，mBindingPair 可用
+    }
+}
+
+// ✅ 眼镜端布局（res/layout/）
+// 左右眼使用相同的布局 ID，SDK 自动镜像到双眼
+
+// ✅ Manifest 声明
+// <activity android:name=".MyGlassesActivity"
+//     android:screenOrientation="landscape" />
+```
+
+### 禁止写法
+
+```kotlin
+// ❌ 眼镜端页面使用普通 Activity
+class BadActivity : AppCompatActivity() { /* 无法使用 mBindingPair */ }
+
+// ❌ 不声明横屏方向
+// 眼镜运行时强制横屏，不声明会导致布局异常
+```
+
+---
+
+## 2. 双目显示（mBindingPair）规范
+
+### 核心概念
+
+`BaseMirrorActivity` 提供 `mBindingPair: ViewPair<LBinding, RBinding>`，其中 `L` 和 `R` 是相同的绑定类型。SDK 自动将布局镜像到左眼和右眼镜片。
+
+`mBindingPair` 提供三个核心方法：
+
+| 方法 | 作用 |
+|---|---|
+| `mBindingPair.setLeft { }` | 在左眼绑定上注册焦点目标（**只在 setLeft 中注册**） |
+| `mBindingPair.updateView { }` | 对左右眼**同时**执行视图操作 |
+| `mBindingPair.checkIsLeft(view)` | 判断当前视图是否属于左眼 |
+
+### 强制要求
+
+- **焦点目标只在 `mBindingPair.setLeft { }` 中注册一次**，SDK 内部自动同步到右眼
+- **视觉更新**（背景色、3D 效果）必须用 `mBindingPair.updateView { }` 同步到双眼，**禁止只更新单眼**
+- `setLeft` 中配置的回调会在左右眼同时生效，**不要在 setLeft 外重复注册**
+
+### 正确写法
+
+```kotlin
+class HomeActivity : BaseMirrorActivity<LayoutHomeBinding>() {
+
+    private var fixPosFocusTracker: FixPosFocusTracker? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        initFocusTarget()
+        initEvent()
+    }
+
+    private fun initFocusTarget() {
+        val focusHolder = FocusHolder()
+
+        // ✅ 只在 setLeft 中注册焦点目标
+        mBindingPair.setLeft {
+            focusHolder.addFocusTarget(
+                FocusInfo(
+                    btnConfirm,
+                    eventHandler = { action -> handleClick() },
+                    focusChangeHandler = { hasFocus ->
+                        // ✅ 视觉更新用 updateView 同步到双眼
+                        mBindingPair.updateView {
+                            triggerFocus(hasFocus, btnConfirm, mBindingPair.checkIsLeft(this))
+                        }
+                    }
+                )
+            )
+            focusHolder.currentFocus(btnConfirm)
+        }
+
+        fixPosFocusTracker = FixPosFocusTracker(focusHolder).apply {
+            focusObj.reqFocus()
+        }
+    }
+
+    // ✅ 视觉更新同步到双眼
+    private fun triggerFocus(hasFocus: Boolean, view: View, isLeft: Boolean) {
+        view.setBackgroundColor(
+            getColor(if (hasFocus) R.color.color_rayneo_theme_0 else R.color.black)
+        )
+        make3DEffectForSide(view, isLeft, hasFocus)
+    }
+}
+```
+
+### 禁止写法
+
+```kotlin
+// ❌ setLeft 中只注册左眼，右眼遗漏
+mBindingPair.left.btnLeft.requestFocus()  // ❌ 只操作了左眼
+
+// ❌ updateView 中遗漏右眼操作
+mBindingPair.left.btn.backgroundColor = Color.RED  // ❌ 只更新了左眼
+mBindingPair.right.btn.backgroundColor = Color.RED  // ✅ 用 updateView 统一更新
+```
+
+---
+
+## 3. 焦点系统规范
+
+### 概述
+
+眼镜上没有触控屏，用户通过镜腿触摸板操作 UI。焦点系统决定了**哪个视图响应触摸事件**。所有可交互的 UI 元素必须注册为焦点目标。
+
+### 核心组件
+
+| 组件 | 作用 |
+|---|---|
+| `FixPosFocusTracker` | 固定位置焦点追踪器，适合静态 UI（按钮列表） |
+| `RecyclerViewSlidingTracker` | RecyclerView 滑动焦点追踪器，适合列表滚动 |
+| `FocusHolder` | 焦点容器，管理多个 `FocusInfo` |
+| `FocusInfo` | 单个焦点的配置（视图、事件处理器、焦点变化处理器） |
+| `make3DEffectForSide(view, isLeft, hasFocus)` | 为焦点视图应用 3D 视觉效果 |
+
+### 两种焦点模式
+
+**模式 A：固定焦点（FixPosFocusTracker）** — 适用于按钮列表、菜单等固定布局
+
+**模式 B：RecyclerView 滑动焦点（RecyclerViewSlidingTracker）** — 适用于可滚动列表，焦点固定在屏幕中央
+
+### 3.1 固定焦点（FixPosFocusTracker）
+
+#### 正确模板
+
+```kotlin
+class MyActivity : BaseMirrorActivity<LayoutMyBinding>() {
+    private var fixPosFocusTracker: FixPosFocusTracker? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        initFocusTarget()  // ✅ 先初始化焦点
+        initEvent()        // ✅ 再初始化事件监听
+    }
+
+    private fun initFocusTarget() {
+        val focusHolder = FocusHolder()  // FocusHolder(false) 禁用循环导航
+
+        mBindingPair.setLeft {
+            val focusTargets = mutableListOf<FocusInfo>()
+            var firstFocusView: View? = null
+
+            fun addFocusTarget(view: View, onClick: () -> Unit) {
+                if (view.visibility != View.VISIBLE) return  // ✅ 跳过不可见视图
+                if (firstFocusView == null) firstFocusView = view
+
+                focusTargets += FocusInfo(
+                    view,
+                    eventHandler = { action ->
+                        when (action) {
+                            is TempleAction.Click -> onClick()
+                            else -> Unit
+                        }
+                    },
+                    focusChangeHandler = { hasFocus ->
+                        mBindingPair.updateView {
+                            triggerFocus(hasFocus, view, mBindingPair.checkIsLeft(this))
+                        }
+                    }
+                )
+            }
+
+            // 注册所有可交互视图
+            addFocusTarget(btnFirst) { navigateToFirst() }
+            addFocusTarget(btnSecond) { navigateToSecond() }
+
+            if (focusTargets.isNotEmpty()) {
+                focusHolder.addFocusTarget(*focusTargets.toTypedArray())
+                firstFocusView?.let { focusHolder.currentFocus(it) }
+            }
+        }
+
+        fixPosFocusTracker = FixPosFocusTracker(focusHolder).apply {
+            focusObj.reqFocus()
+        }
+    }
+
+    private fun initEvent() {
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                templeActionViewModel.state.collect { action ->
+                    when (action) {
+                        is TempleAction.DoubleClick -> finish()  // ✅ 双击返回
+                        else -> fixPosFocusTracker?.handleFocusTargetEvent(action)
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+### 3.2 RecyclerView 滑动焦点
+
+适用于联系人列表、文件列表等需要滚动的场景。焦点固定在屏幕中央，滑动浏览时列表内容滚动但焦点框不动。
+
+```kotlin
+class ListActivity : BaseMirrorActivity<LayoutRecyclerBinding>() {
+    private lateinit var slidingTracker: RecyclerViewSlidingTracker
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        slidingTracker = RecyclerViewSlidingTracker(
+            ViewPair(mBindingPair.left.recyclerView, mBindingPair.right.recyclerView)
+        )
+        initView()
+        initEvent()
+        slidingTracker.focusObj.hasFocus = true  // ✅ 激活焦点
+    }
+
+    private fun initView() {
+        mBindingPair.updateView {
+            val isLeft = mBindingPair.checkIsLeft(this)
+            recyclerView.apply {
+                layoutManager = LinearLayoutManager(context)
+                adapter = MyAdapter(context, isLeft, slidingTracker).apply {
+                    setData(contactList)
+                }
+                itemAnimator = null  // ✅ 必须禁用动画
+                val snapHelper = StartSnapHelper(41.dp)
+                snapHelper.attachToRecyclerView(this)
+                setTag(R.id.tag_snap_helper, snapHelper)
+            }
+            make3DEffectForSide(ivSelectHover, isLeft, isLeft)
+            slidingTracker.setCurrentSelectPos(0)
+            setViewVisible(true, ivSelectHover)
+        }
+    }
+
+    private fun initEvent() {
+        lifecycleScope.launchWhenResumed {
+            val vm = ViewModelProvider(this@ListActivity).get<TempleActionViewModel>()
+            vm.state.collect {
+                if (!slidingTracker.focusObj.hasFocus || !isActive || it.consumed) return@collect
+                slidingTracker.handleActionEvent(it) { action ->
+                    when (action) {
+                        is TempleAction.DoubleClick -> finish()
+                        is TempleAction.Click -> {
+                            if (!action.consumed) {
+                                FToast.show((adapter as MyAdapter).getCurrentData()?.name ?: "")
+                            }
+                        }
+                        else -> {}
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+### 焦点样式规范
+
+焦点效果通过 `triggerFocus` 方法统一实现：
+
+```kotlin
+private fun triggerFocus(hasFocus: Boolean, view: View, isLeft: Boolean) {
+    // 背景色：获得焦点时使用主题色，失去焦点时黑色
+    view.setBackgroundColor(
+        getColor(if (hasFocus) R.color.color_rayneo_theme_0 else R.color.black)
+    )
+    // 3D 效果：增强眼镜显示的立体感
+    make3DEffectForSide(view, isLeft, hasFocus)
+}
+```
+
+### 强制要求
+
+- 所有可交互视图必须注册为焦点目标，**不可交互的视图（如纯文本 Label）不需要注册**
+- 跳过不可见视图（`visibility != View.VISIBLE`）
+- 第一个可见视图自动获得初始焦点：`focusHolder.currentFocus(firstView)`
+- 注册后必须调用 `fixPosFocusTracker.focusObj.reqFocus()` 激活焦点
+- **禁止**在 `onCreate` 之外注册焦点目标（焦点应在 Activity 启动时一次性注册完毕）
+
+### 禁止写法
+
+```kotlin
+// ❌ 不注册焦点目标，导致触摸板无法交互
+class BadActivity : BaseMirrorActivity<LayoutBadBinding>() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        // ❌ 没有 initFocusTarget()，按钮无法响应触摸板
+        btnConfirm.setOnClickListener { doSomething() }  // ❌ View.OnClickListener 无效
+    }
+}
+
+// ❌ 在运行时动态注册焦点
+private fun onDataLoaded() {
+    // ❌ 焦点系统不支持动态添加，需要在 initFocusTarget() 中一次性注册
+    focusHolder.addFocusTarget(FocusInfo(...))  // ❌ 不推荐
+}
+```
+
+---
+
+## 4. 镜腿触摸板（Temple Touchpad）事件规范
+
+### 事件类型
+
+| 事件 | 触发方式 | 典型用途 |
+|---|---|---|
+| `TempleAction.Click` | 单击镜腿 | 确认 / 选中 / 导航 |
+| `TempleAction.DoubleClick` | 双击镜腿 | 返回上一页（**几乎所有页面的标准返回方式**） |
+| `TempleAction.LongClick` | 长按镜腿 | 特殊操作 |
+| `TempleAction.TripleClick` | 三击镜腿 | 调试 / 特殊场景 |
+| `TempleAction.SlideForward` | 向前滑动 | 列表下一项 / 前进 |
+| `TempleAction.SlideBackward` | 向后滑动 | 列表上一项 / 后退 |
+| `TempleAction.SlideUpwards` | 向上滑动 | 列表向上滚动 |
+| `TempleAction.SlideDownwards` | 向下滑动 | 列表向下滚动 |
+
+### 事件收集规范
+
+必须在 `repeatOnLifecycle(Lifecycle.State.RESUMED)` 中收集事件，禁止在 `onCreate` 阶段直接处理。
+
+```kotlin
+// ✅ 标准事件收集模板
+lifecycleScope.launch {
+    repeatOnLifecycle(Lifecycle.State.RESUMED) {
+        templeActionViewModel.state.collect { action ->
+            when (action) {
+                is TempleAction.DoubleClick -> finish()  // 返回
+                is TempleAction.Click -> { /* 处理单击 */ }
+                is TempleAction.SlideForward -> { /* 滑动前进 */ }
+                else -> { /* 交给焦点追踪器处理 */ }
+            }
+        }
+    }
+}
+```
+
+### 强制要求
+
+- **双击必须映射为 `finish()`**，这是眼镜应用的全局返回约定
+- 不在 `repeatOnLifecycle(Lifecycle.State.RESUMED)` 中收集事件会导致后台运行时误响应
+- `action.consumed` 用于判断事件是否已被消耗，避免重复处理
+- 不使用 `View.OnClickListener` 或 `setOnTouchListener`，触摸板事件通过 `TempleAction` 统一分发
+
+### 禁止写法
+
+```kotlin
+// ❌ 使用 View.OnClickListener（眼镜上没有点击事件）
+btnConfirm.setOnClickListener { finish() }  // ❌ 永远不会触发
+
+// ❌ 在 onCreate 中直接处理事件
+override fun onCreate(savedInstanceState: Bundle?) {
+    super.onCreate(savedInstanceState)
+    templeActionViewModel.state.collect { action ->  // ❌ 时机过早
+        if (action is TempleAction.DoubleClick) finish()
+    }
+}
+```
+
+---
+
+## 5. 布局（Layout / ViewBinding）规范
+
+### 基础规范
+
+- 眼镜端使用 **XML 布局 + ViewBinding**，禁止使用 Compose
+- 所有布局使用黑色背景（`android:background="@color/black"`）
+- 颜色主题优先使用 SDK 提供的 `R.color.color_rayneo_theme_0` 等预定义颜色
+- `textAllCaps="false"` 禁止全大写显示中文
+
+### 布局目录约定
+
+| 目录 | 用途 |
+|---|---|
+| `res/layout/` | 主布局（左眼使用） |
+| `res/layout-land/` | 横屏特定布局（眼镜强制横屏，一般不需要） |
+
+### ViewBinding 使用规范
+
+```kotlin
+// Activity 中的标准用法
+class MyActivity : BaseMirrorActivity<LayoutMyBinding>() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        // ✅ mBindingPair 是 ViewPair，左眼和右眼使用相同类型
+        mBindingPair.setLeft {
+            btnConfirm.text = "确认"
+            tvTitle.text = "标题"
+        }
+    }
+}
+```
+
+### 强制要求
+
+- 布局 ID 必须唯一，用于 `findViewById` 查找和焦点系统注册
+- ViewBinding 对象通过 `mBindingPair.left` / `mBindingPair.right` 访问
+- 使用 `make3DEffectForSide(view, isLeft, hasFocus)` 为焦点元素添加 3D 效果
+- 使用 SDK 扩展函数 `setViewVisible(true/false, view)` 控制可见性
+
+### 禁止写法
+
+```kotlin
+// ❌ 使用 findViewById（应使用 ViewBinding）
+val btn = findViewById<Button>(R.id.btn_confirm)  // ❌ 不推荐
+
+// ❌ 硬编码颜色（应使用 SDK 颜色资源）
+view.setBackgroundColor(Color.parseColor("#000000"))  // ❌ 应用 R.color.black
+```
+
+---
+
+## 6. Fragment 与手机端 UI 规范
+
+### 手机端 UI
+
+当需要同时在手机端展示 UI（如调试界面）时，使用 `BaseEventActivity`，该 Activity 不做双目镜像。
+
+```kotlin
+// ✅ 手机端 Activity（不需要镜像）
+class PhoneDebugActivity : BaseEventActivity() {
+    private lateinit var binding: LayoutPhoneDebugBinding
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        binding = LayoutPhoneDebugBinding.inflate(layoutInflater)
+        setContentView(binding.root)
+        // 标准 ViewBinding 用法
+    }
+}
+```
+
+### Fragment 中的焦点管理
+
+Fragment 中需要与眼镜端焦点系统交互时，让 Fragment 实现 `IFocusable` 接口。
+
+```kotlin
+class MyFragment : Fragment(), IFocusable {
+    lateinit var focusParent: View  // 焦点的父视图引用
+
+    override fun reqFocus(lastFocus: View?) {
+        // Fragment 获得焦点时调用
+        myView.requestFocus()
+    }
+
+    override fun releaseFocus() {
+        // Fragment 失去焦点时调用
+        myView.clearFocus()
+    }
+}
+```
+
+在 Activity 中管理 Fragment 焦点：
+
+```kotlin
+// Activity 中
+binding.titleView.onTitleSelectListener = object : OnTitleSelectListener {
+    override fun onTitleSelect(pos: Int, titleView: TextView) {
+        val fragment = fragmentList[pos]
+        showFragment(pos)
+        binding.titleView.releaseFocus()
+        if (fragment is IFocusable) {
+            fragment.reqFocus(binding.titleView)
+        }
+    }
+}
+```
+
+---
+
+## 7. 对话框（FDialog）规范
+
+眼镜端使用 SDK 提供的 `FDialog`，禁止使用系统 `AlertDialog`。
+
+```kotlin
+FDialog.Builder<DialogTestBinding>(this)
+    .setCancelable(true)
+    .setContentView(DialogTestBinding::class.java) { pair, dialog ->
+        // 配置焦点追踪
+        val btnOk = TrackInfo(
+            pair.left.btnOk,
+            eventHandler = { action, dialog ->
+                if (action is TempleAction.Click) {
+                    FToast.show("Confirmed")
+                    dialog.dismiss()
+                }
+            },
+            focusChangeHandler = { hasFocus ->
+                pair.updateView {
+                    triggerFocus(hasFocus, btnOk, pair.checkIsLeft(this))
+                }
+            }
+        )
+        val tracker = FocusTracker(true).apply {
+            addFocusTarget(btnOk, btnCancel)
+        }
+        tracker.currentFocus(pair.left.btnOk)
+        setFocusTracker(tracker)
+    }
+    .setEventHandler { action, dialog ->
+        if (action is TempleAction.DoubleClick) dialog.dismiss()
+    }
+    .build()
+    .show()
+```
+
+---
+
+## 8. SDK 专用工具类
+
+### 日志
+
+```kotlin
+FLogger.d("tag", "message")  // Debug 级别
+FLogger.i("tag", "message")  // Info 级别
+FLogger.e("tag", "message")  // Error 级别
+```
+
+### Toast
+
+```kotlin
+FToast.show("消息内容")  // 在眼镜镜片上显示 Toast
+```
+
+### SDK 扩展函数
+
+```kotlin
+// dp 转换
+val margin = 41.dp
+
+// 可见性控制
+setViewVisible(true, view)
+
+// 判断是否为左眼
+mBindingPair.checkIsLeft(this)
+
+// 3D 效果（焦点状态）
+make3DEffectForSide(view, isLeft, hasFocus)
+```
+
+---
+
+## 9. 权限规范
+
+眼镜应用的权限处理与普通 Android 应用相同。典型需要处理的权限：
+
+| 权限 | 用途 |
+|---|---|
+| `Manifest.permission.CAMERA` | 相机预览 |
+| `Manifest.permission.RECORD_AUDIO` | 语音识别 |
+| `Manifest.permission.ACCESS_FINE_LOCATION` | GPS 定位 |
+| `Manifest.permission.BLUETOOTH` / `BLUETOOTH_CONNECT` | BLE 通信 |
+
+权限检查和请求流程：
+
+```kotlin
+if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+    != PackageManager.PERMISSION_GRANTED
+) {
+    ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), REQUEST_CODE)
+} else {
+    startCameraActivity()
+}
+
+override fun onRequestPermissionsResult(requestCode: Int, ...) {
+    super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+    if (requestCode == REQUEST_CODE && grantResults.isNotEmpty()
+        && grantResults[0] == PackageManager.PERMISSION_GRANTED
+    ) {
+        startCameraActivity()
+    }
+}
+```
+
+---
+
+## 10. 包结构约定
+
+眼镜端应用建议的包结构：
+
+```
+com.example.myapp/
+├── ui/
+│   ├── activity/
+│   │   ├── MainActivity.kt         # BaseMirrorActivity（眼镜端主页）
+│   │   ├── detail/
+│   │   │   └── DetailActivity.kt   # 详情页
+│   │   └── phone/
+│   │       └── PhoneDebugActivity.kt  # BaseEventActivity（手机调试页）
+│   ├── adapter/
+│   │   └── MyAdapter.kt            # RecyclerView Adapter
+│   ├── fragment/
+│   │   └── MyFragment.kt           # Fragment（实现 IFocusable）
+│   └── widget/
+│       └── CustomView.kt           # 自定义 View
+├── domain/
+│   ├── model/
+│   │   └── MyModel.kt
+│   └── usecase/
+│       └── GetDataUseCase.kt
+├── data/
+│   ├── repository/
+│   │   └── MyRepository.kt
+│   └── remote/
+│       └── MyApi.kt
+└── MercuryApp.kt                   # Application 类
+```
+
+---
+
+## 11. 常见错误预警
+
+| AI 常犯错误 | 正确做法 |
+|---|---|
+| 使用 `AppCompatActivity` 开发眼镜端页面 | 眼镜端必须用 `BaseMirrorActivity` |
+| 在眼镜端使用 Jetpack Compose | 只用 ViewBinding + XML 布局 |
+| 使用 `View.OnClickListener` | 通过 `TempleAction.Click` + 焦点系统处理 |
+| 只更新左眼或右眼的视觉效果 | 用 `mBindingPair.updateView { }` 同步双眼 |
+| 双击镜腿不做任何处理 | 必须 `finish()` |
+| 不注册焦点目标就期望视图可交互 | 所有可交互视图必须在 `initFocusTarget()` 中注册 |
+| 不调用 `focusObj.reqFocus()` 激活焦点 | 注册后必须调用激活方法 |
+| 使用系统 `AlertDialog` | 眼镜端使用 `FDialog` |
+| 不禁用 RecyclerView 的 itemAnimator | `recyclerView.itemAnimator = null` |
+| `repeatOnLifecycle` 时机错误 | 只在 `RESUMED` 状态收集事件 |
+| 在 `companion object` 中持有 View 引用 | 禁止，内存泄漏 |
+| 硬编码像素值 | 使用 `dp` 扩展函数 |
+
+---
+
+## 12. 设备差异检测（X2 vs X3）
+
+### DeviceUtil 设备检测
+
+SDK 提供 `DeviceUtil.isX3Device()` 方法用于区分 RayNeo X2 和 X3 设备。
+
+```kotlin
+if (DeviceUtil.isX3Device()) {
+    // RayNeo X3 设备特性
+} else {
+    // RayNeo X2 设备特性
+}
+```
+
+### X2 与 X3 功能差异表
+
+| 功能模块 | X2 支持 | X3 支持 | 说明 |
+|---------|---------|---------|------|
+| **MIC 录音模式** | `sound`, `camcorder`, `translation`, `voiceassistant` | 新的 MIC API | X3 有独立的 MIC 管理 |
+| **TP 上滑/下滑事件** | ❌ | ✅ | X3 支持 `SlideUpwards`/`SlideDownwards` |
+| **双指点击/长按** | ❌ | ✅ | X3 支持双指手势 |
+| **VGA 摄像头** | ❌ | ✅ | X3 专用空间定位摄像头 (640x480) |
+| **BLE 连接状态** | 部分 | 完整 | X3 BLE 状态更稳定 |
+| **filterMode 设置** | ❌ | ✅ | X3 支持 OnlyX/OnlyY 滑动过滤 |
+
+### X3 独有 TP 事件
+
+```kotlin
+// X3 独有的手势事件（X2 不支持）
+is TempleAction.SlideUpwards   // 上滑
+is TempleAction.SlideDownwards // 下滑
+is TempleAction.TpSlideContinuous -> {
+    // 判断滑动方向
+    if (action.isVertical) { /* 垂直滑动 */ }
+    else { /* 水平滑动 */ }
+}
+```
+
+### MIC 录音模式差异
+
+**X2 使用 AudioManager.setParameters：**
+
+```kotlin
+// X2 MIC 模式设置
+fun setMicMode(mode: MicMode) {
+    val param = when (mode) {
+        MicMode.CAMCORDER -> "audio_source_record=camcorder"
+        MicMode.TRANSLATION -> "audio_source_record=translation"
+        MicMode.VOICE_ASSISTANT -> "audio_source_record=voiceassistant"
+        MicMode.OFF -> "audio_source_record=off"
+    }
+    audioManager.setParameters(param)
+}
+
+enum class MicMode {
+    CAMCORDER,  // 2颗mic，全收，无降噪
+    TRANSLATION, // 3颗mic，不收佩戴者声音，收外部
+    VOICE_ASSISTANT, // 2颗mic，主要收佩戴者声音
+    OFF
+}
+```
+
+**X3 使用新的 MIC API**（参考 IPC SDK 文档）
+
+---
+
+## 13. Camera 开发规范
+
+### Camera2 API 推荐
+
+眼镜端 Camera 开发推荐使用 Camera2 API，与一般 Android 设备无异。
+
+```kotlin
+class CameraActivity : BaseMirrorActivity<LayoutCameraBinding>() {
+    private lateinit var cameraManager: CameraManager
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        cameraManager = getSystemService(CAMERA_SERVICE) as CameraManager
+        enumerateCameraResolutions()
+    }
+
+    private fun enumerateCameraResolutions() {
+        for (cameraId in cameraManager.cameraIdList) {
+            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            map?.getOutputSizes(SurfaceTexture::class.java)?.forEach { size ->
+                FLogger.d("Camera $cameraId: ${size.width}x${size.height}")
+            }
+        }
+    }
+}
+```
+
+### X3 VGA 摄像头（空间定位）
+
+X3 设备有独立的 VGA 摄像头（Camera ID 通常为 1），专门用于空间定位。
+
+| 参数 | 值 |
+|------|-----|
+| 分辨率 | 640x480, 640x400, 640x360, 480x360, 352x288, 320x240, 320x180, 176x144 |
+| 用途 | SLAM 空间定位、空间锚点 |
+
+```kotlin
+// X3 检测 VGA 摄像头
+val characteristics = cameraManager.getCameraCharacteristics("1")
+val facing = characteristics.get(CameraCharacteristics.LENS_FACING)
+// VGA 摄像头用于空间定位，非普通拍照
+```
+
+### 权限要求
+
+```kotlin
+// AndroidManifest.xml
+<uses-permission android:name="android.permission.CAMERA" />
+<uses-feature android:name="android.hardware.camera" android:required="true" />
+```
+
+---
+
+## 14. 音频开发规范
+
+### MIC 录音开发
+
+眼镜端音频开发与一般 Android 无异，但需要注意 MIC 模式配置。
+
+**X2 MIC 模式表：**
+
+| 模式 | MIC 数量 | 特点 | setParameters 值 |
+|------|---------|------|-----------------|
+| `camcorder` | 2颗 | 全收，无降噪 | `audio_source_record=camcorder` |
+| `translation` | 3颗 | 不收佩戴者，收外部 | `audio_source_record=translation` |
+| `voiceassistant` | 2颗 | 主要收佩戴者 | `audio_source_record=voiceassistant` |
+
+**重要：退出录音时必须关闭 MIC**
+
+```kotlin
+// 退出时设置 off
+audioManager.setParameters("audio_source_record=off")
+```
+
+### X3 音频特性
+
+X3 使用新的音频 API，具体参考 IPC SDK 文档中的音频模块。
+
+---
+
+## 15. IMU 传感器开发
+
+### 推荐传感器：Game Rotation Vector
+
+对于需要设备姿态（旋转角度）的应用，推荐使用 Game Rotation Vector 传感器。它融合多传感器数据，不使用磁力计，不受磁场干扰。
+
+```kotlin
+class IMUActivity : BaseMirrorActivity<LayoutImuBinding>(), SensorEventListener {
+
+    private lateinit var sensorManager: SensorManager
+    private var gameRotationVectorSensor: Sensor? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
+        gameRotationVectorSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        gameRotationVectorSensor?.let {
+            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_FASTEST)
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        sensorManager.unregisterListener(this)  // 必须取消注册
+    }
+
+    override fun onSensorChanged(event: SensorEvent) {
+        if (event.sensor.type == Sensor.TYPE_GAME_ROTATION_VECTOR) {
+            // 四元数：[x*sin(θ/2), y*sin(θ/2), z*sin(θ/2), cos(θ/2)]
+            val x = event.values[0]
+            val y = event.values[1]
+            val z = event.values[2]
+            val w = event.values[3]
+
+            // 转换为欧拉角
+            val euler = quaternionToEuler(x, y, z, w)
+            val pitch = euler[0]  // 俯仰角
+            val roll = euler[1]    // 横滚角
+            val yaw = euler[2]     // 偏航角（相对值，会漂移）
+        }
+    }
+
+    // 四元数转欧拉角
+    private fun quaternionToEuler(x: Float, y: Float, z: Float, w: Float): FloatArray {
+        val euler = FloatArray(3)
+        val sinP = 2.0f * (w * x + y * z)
+        val cosP = 1.0f - 2.0f * (x * x + y * y)
+        euler[0] = Math.toDegrees(Math.atan2(sinP.toDouble(), cosP.toDouble())).toFloat()
+
+        val sinR = 2.0f * (w * y - z * x)
+        euler[1] = if (abs(sinR) >= 1) {
+            (Math.PI / 2).toFloat() * sign(sinR)
+        } else {
+            Math.toDegrees(Math.asin(sinR.toDouble())).toFloat()
+        }
+
+        val sinY = 2.0f * (w * z + x * y)
+        val cosY = 1.0f - 2.0f * (y * y + z * z)
+        euler[2] = Math.toDegrees(Math.atan2(sinY.toDouble(), cosY.toDouble())).toFloat()
+
+        return euler
+    }
+}
+```
+
+### 采样率常量
+
+| 常量 | 用途 |
+|------|------|
+| `SENSOR_DELAY_FASTEST` | 最快频率（推荐 IMU） |
+| `SENSOR_DELAY_GAME` | 游戏速率 |
+| `SENSOR_DELAY_NORMAL` | 默认速率 |
+| `SENSOR_DELAY_UI` | UI 变化 |
+
+---
+
+## 16. BLE 连接与 GPS 推流
+
+### BLE 连接状态监听
+
+使用 `MobileState.isMobileConnected()` 监听手机连接状态。
+
+```kotlin
+class APIActivity : BaseMirrorActivity<LayoutApiBinding>() {
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        collectBleStatus()
+    }
+
+    private fun collectBleStatus() {
+        MobileState.isMobileConnected()
+            .onEach { isConnected ->
+                FLogger.d("Mobile connected: $isConnected")
+                mBindingPair.updateView {
+                    tvBleStatus.text = if (isConnected) "已连接" else "未连接"
+                }
+            }
+            .launchIn(lifecycleScope)
+    }
+}
+```
+
+### GPS 推流（需要 IPC SDK）
+
+获取手机 GPS 数据需要集成 IPC SDK，具体实现参考 IPC SDK Sample。
+
+```kotlin
+// IPC SDK GPS 数据回调
+private val gpsResponse = OnResponseListener { response ->
+    response?.getData()?.let { data ->
+        val json = JSONObject(data)
+        val latitude = json.getDouble("mLatitude")
+        val longitude = json.getDouble("mLongitude")
+        val altitude = json.getDouble("mAltitude")
+
+        runOnUiThread {
+            mBindingPair.updateView {
+                tvLocation.text = "$latitude, $longitude"
+            }
+        }
+    }
+}
+```
+
+**注意：`onResponse` 回调在异步线程，必须切换到主线程更新 UI。**
+
+---
+
+## 17. 视频合目（SurfaceView / MirroringView）
+
+### MirroringView 组件
+
+对于视频播放等 SurfaceView 场景，使用 `MirroringView` 实现合目镜像。
+
+```kotlin
+class VideoPlayActivity : BaseMirrorActivity<LayoutVideoBinding>() {
+
+    private var mPlayer: MediaPlayer? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        initPlayer()
+    }
+
+    private fun initPlayer() {
+        binding.textureView.let { textureView ->
+            // 设置 SurfaceTexture
+            mPlayer = MediaPlayer().apply {
+                setDataSource(context, Uri.parse("android.resource://$packageName/${R.raw.video}"))
+                setSurface(Surface(textureView.surfaceTexture))
+                prepare()
+                start()
+            }
+
+            // 设置镜像
+            binding.mirrorView.setSource(textureView)
+            binding.mirrorView.startMirroring()
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        binding.mirrorView.stopMirroring()  // 必须停止镜像
+        mPlayer?.release()
+        mPlayer = null
+    }
+}
+```
+
+### 布局结构要求
+
+```
+左眼布局：SurfaceView (textureView)
+右眼布局：MirroringView (mirrorView)
+
+SurfaceView 和 MirroringView 必须分属不同屏幕
+```
+
+---
+
+## 18. 跟手效果与滑动追踪器
+
+### 三种滑动追踪器
+
+| 追踪器 | 场景 | 特点 |
+|--------|------|------|
+| `RecyclerViewSlidingTracker` | 固定焦点位 + 列表滚动 | 焦点固定，列表滚动 |
+| `RecyclerViewFocusTracker` | 移动焦点位 + 列表 | 滑动一定距离切换焦点 |
+| `FixPosFocusTracker` | 移动焦点位 + 固定位置视图 | 自定义滑动阈值 |
+
+### FixPosFocusTracker 参数详解
+
+```kotlin
+class FixPosFocusTracker(
+    val focusHolder: FocusHolder,
+    private val continuous: Boolean = false,    // 连续滑动模式
+    private val isVertical: Boolean = true,     // 垂直滑动
+    private val ignoreDelta: Int = IGNORE_DELTA // 焦点切换阈值(50dp)
+)
+```
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `loop` | false | 焦点循环切换 |
+| `continuous` | false | 单次滑动模式 |
+| `isVertical` | true | 只响应垂直滑动 |
+| `ignoreDelta` | 50dp | 滑动超过此距离才切换焦点 |
+
+### 模式组合表
+
+| 模式 | FocusHolder.loop | continuous | isVertical | ignoreDelta |
+|------|------------------|------------|------------|-------------|
+| 连续滑动 | 受影响 | true | 不受影响 | 受影响 |
+| 单次滑动 | 受影响 | false | 受影响 | 受影响 |
+
+### RecyclerView 跟手效果示例
+
+```kotlin
+class FixedFocusPosRVActivity : BaseMirrorActivity<LayoutRecyclerBinding>() {
+
+    private lateinit var recyclerViewSlidingTracker: RecyclerViewSlidingTracker
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        initRecyclerView()
+        initEvent()
+    }
+
+    private fun initRecyclerView() {
+        recyclerViewSlidingTracker = RecyclerViewSlidingTracker(
+            ViewPair(mBindingPair.left.recyclerView, mBindingPair.right.recyclerView)
+        )
+
+        mBindingPair.updateView {
+            recyclerView.layoutManager = LinearLayoutManager(context)
+            recyclerView.adapter = MyAdapter(isLeft)
+            recyclerView.itemAnimator = null  // 必须禁用
+        }
+
+        recyclerViewSlidingTracker.focusObj.hasFocus = true
+    }
+
+    private fun initEvent() {
+        // 监听原始事件，修改坐标实现跟手
+        recyclerViewSlidingTracker.observeOriginMotionEventStream(motionEventDispatcher) { event ->
+            MotionEvent.obtain(
+                event.downTime, event.eventTime, event.action,
+                320f,  // 修改后的 X 坐标（列表中心）
+                event.y, event.metaState
+            )
+        }
+
+        lifecycleScope.launchWhenResumed {
+            templeActionViewModel.state.collect { action ->
+                if (!recyclerViewSlidingTracker.focusObj.hasFocus || action.consumed) return@collect
+                recyclerViewSlidingTracker.handleActionEvent(action) { handledAction ->
+                    when (handledAction) {
+                        is TempleAction.DoubleClick -> finish()
+                        is TempleAction.Click -> {
+                            if (!handledAction.consumed) {
+                                FToast.show("Selected item")
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+---
+
+## 19. 动态焦点
+
+### 运行时动态添加焦点视图
+
+使用 `addFocusView` 扩展函数动态添加焦点目标。
+
+```kotlin
+class DynamicFocusTargetActivity : BaseMirrorActivity<LayoutDynamicBinding>() {
+
+    private val focusHandles = mutableListOf<FocusViewHandle<View>>()
+    private var currentDynamicFocus: FocusViewHandle<View>? = null
+
+    private fun addDynamicFocus() {
+        var handle: FocusViewHandle<View>? = null
+        handle = mBindingPair.addFocusView(
+            parent = mBindingPair.left.llParent,
+            viewFactory = {
+                Button(this@DynamicFocusTargetActivity).apply {
+                    text = "动态按钮"
+                    background = null
+                }
+            },
+            focusHolder = focusHolder,
+            focusConfig = {
+                layoutParamsFactory = { parent, view ->
+                    LinearLayout.LayoutParams(150.dp, LayoutParams.WRAP_CONTENT).apply {
+                        setMargins(20.dp, 5.dp, 20.dp, 5.dp)
+                    }
+                }
+                eventHandler = { action ->
+                    when (action) {
+                        is TempleAction.Click -> FToast.show("动态按钮点击")
+                    }
+                }
+                onFocusChange = { view, hasFocus, isLeft ->
+                    triggerFocus(hasFocus, view, isLeft)
+                }
+            }
+        )
+
+        focusHandles.add(handle!!)
+        currentDynamicFocus = handle
+    }
+
+    private fun removeDynamicFocus() {
+        currentDynamicFocus?.clearFocusView()
+    }
+}
+```
+
+### 移除动态焦点
+
+```kotlin
+currentDynamicFocus.clearFocusView()
+```
+
+---
+
+## 20. 3D 效果实现
+
+### make3DEffect / make3DEffectForSide
+
+SDK 提供基于双目视差的伪 3D 效果，通过左右视图偏移产生景深感。
+
+```kotlin
+// 同时设置左右两个 View
+make3DEffect(left.slideView, right.slideView, true, 10f)
+
+// 左右分别调用
+make3DEffectForSide(view, isLeft, hasFocus)
+```
+
+### 焦点状态 3D 效果
+
+```kotlin
+private fun triggerFocus(hasFocus: Boolean, view: View, isLeft: Boolean) {
+    view.setBackgroundColor(
+        getColor(if (hasFocus) R.color.color_rayneo_theme_0 else R.color.black)
+    )
+    make3DEffectForSide(view, isLeft, hasFocus)  // 应用 3D 效果
+}
+```
+
+---
+
+## 21. Fragment 合目
+
+### BaseMirrorFragment
+
+SDK 提供 `BaseMirrorFragment` 实现 Fragment 级别的合目。
+
+**注意：BaseMirrorFragment 不能添加到 BaseMirrorActivity 中。**
+
+```kotlin
+class MyMirrorFragment : BaseMirrorFragment<LayoutFragmentBinding>() {
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+
+        mBindingPair.setLeft {
+            btnConfirm.setOnClickListener { /* ... */ }
+        }
+    }
+}
+```
+
+### Fragment + RecyclerView 合目
+
+参考 SDK Demo 中的 `FragmentRecyclerViewDemo`。
+
+---
+
+## 22. MirrorContainerView 与 BaseMirrorContainerView
+
+### 基于组合的 MirrorContainerView
+
+```kotlin
+class MirrorContainerViewActivity : BaseMirrorActivity<LayoutMirrorContainerBinding>() {
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+
+        // 必须调用 bindTo
+        binding.mirrorContainer.bindTo(
+            leftContainer = mBindingPair.left.container,
+            rightContainer = mBindingPair.right.container
+        )
+
+        // 动态添加子视图
+        mBindingPair.setLeft {
+            val childView = layoutInflater.inflate(R.layout.item, container, false)
+            container.addView(childView)
+        }
+    }
+}
+```
+
+### 基于继承的 BaseMirrorContainerView
+
+参考 SDK Demo 中的 `TitleView` 实现。
+
+---
+
+## 附录：与现有 rules 的关系
+
+本规则是眼镜开发的**专项补充规则**，与已有的通用 Android 规则的关系：
+
+- **android-clean-arch.mdc**：分层架构规范（Clean Architecture、UseCase、Repository）**完全适用**，眼镜项目同样需要分层
+- **android-state-mgmt.mdc**：`StateFlow`、`Channel/Effect` 模式**完全适用**；但眼镜 UI 使用 ViewBinding，ViewModel 通过 ViewBinding 更新视图（而非 Compose State）
+- **android-compose-perf.mdc**：**不适用**于眼镜端 UI（眼镜端不用 Compose）
+- **android-code-review.mdc** / **android-crash-fix.mdc**：**完全适用**，所有安全、空指针、协程规范均适用
+
+眼镜项目的 Clean Architecture 分层示例：
+
+```
+feature/
+└── contact/
+    ├── ui/
+    │   ├── ContactListActivity.kt   # BaseMirrorActivity
+    │   ├── ContactListViewModel.kt  # ViewModel（走 UseCase）
+    │   └── ContactAdapter.kt
+    ├── domain/
+    │   ├── ContactRepository.kt     # 接口
+    │   └── GetContactsUseCase.kt
+    └── data/
+        └── ContactRepositoryImpl.kt  # 实现
+```

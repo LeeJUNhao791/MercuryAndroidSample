@@ -3,6 +3,8 @@
 ## 概述
 本规则约束 ViewModel、协程、状态管理的 Kotlin 编码规范。适用于所有 ViewModel 和协程相关代码。
 
+**眼镜 AR 项目说明**：本规则**完全适用于**眼镜项目的 ViewModel 层。眼镜端 UI 使用 ViewBinding 更新视图（而非 Compose 的 `collectAsStateWithLifecycle()`），ViewModel 暴露的 `StateFlow` 和 `Channel` effect 模式保持不变。具体 UI 更新方式参见 `glasses-ui-dev.mdc`。
+
 ---
 
 ## 1. StateFlow 规范

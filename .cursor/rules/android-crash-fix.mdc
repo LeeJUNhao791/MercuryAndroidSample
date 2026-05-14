@@ -3,6 +3,8 @@
 ## 概述
 本规则定义 Android 崩溃分析、根因推理和修复生成的系统化框架。适用于所有 Bug 修复和 Crash 修复场景。
 
+**眼镜 AR 项目说明**：本规则适用于眼镜项目的崩溃分析。眼镜端专项崩溃场景（焦点系统、mBindingPair、TempleAction 等）参见 `glasses-ui-dev.mdc` 第 11 节常见错误预警，两者结合使用。
+
 ---
 
 ## 1. 崩溃上下文包（Crash Context）构建规范
